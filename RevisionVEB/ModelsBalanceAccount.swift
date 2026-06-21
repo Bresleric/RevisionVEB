@@ -65,9 +65,35 @@ final class BalanceAccount {
         accountNumber.hasPrefix("51") || accountNumber.hasPrefix("53")
     }
 
-    /// Cycle de revision auquel ce compte appartient (deduit du numero de compte)
+    /// Cycle par defaut (deduit automatiquement du numero de compte).
     var cycle: RevisionCycle {
         RevisionCycle.forAccount(accountNumber)
+    }
+
+    /// Cycle reel = override manuel s'il existe, sinon cycle automatique.
+    func effectiveCycle(rules: [String: RevisionCycle]) -> RevisionCycle {
+        rules[accountNumber] ?? RevisionCycle.forAccount(accountNumber)
+    }
+}
+
+// MARK: - Regle d'affectation compte -> cycle (override manuel)
+
+/// Permet a l'utilisateur de corriger le cycle d'un compte. Persiste independamment
+/// des imports (une regle par numero de compte). Si aucune regle, on utilise le
+/// cycle automatique deduit du numero de compte.
+@Model
+final class AccountCycleRule {
+    @Attribute(.unique) var accountNumber: String
+    var cycleRaw: String
+
+    init(accountNumber: String, cycle: RevisionCycle) {
+        self.accountNumber = accountNumber
+        self.cycleRaw = cycle.rawValue
+    }
+
+    var cycle: RevisionCycle {
+        get { RevisionCycle(rawValue: cycleRaw) ?? .nonClasse }
+        set { cycleRaw = newValue.rawValue }
     }
 }
 

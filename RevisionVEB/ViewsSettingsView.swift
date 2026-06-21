@@ -45,7 +45,7 @@ struct SettingsView: View {
                         
                         Picker("Restaurant par défaut", selection: $defaultRestaurant) {
                             Text("Freddy").tag("Freddy")
-                            Text("Bonbao").tag("Bonbao")
+                            Text("Chez Tante Liesel").tag("Chez Tante Liesel")
                         }
                         .pickerStyle(.segmented)
                         
@@ -119,7 +119,7 @@ struct SettingsView: View {
                                 Text("Restaurants")
                                     .foregroundStyle(.secondary)
                                 Spacer()
-                                Text("Freddy & Bonbao")
+                                Text("Freddy & Chez Tante Liesel")
                                     .fontWeight(.medium)
                             }
                         }

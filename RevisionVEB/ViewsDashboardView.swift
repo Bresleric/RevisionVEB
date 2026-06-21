@@ -25,7 +25,7 @@ struct DashboardView: View {
                             .font(.largeTitle)
                             .fontWeight(.bold)
                         
-                        Text("Audit comptable - Freddy & Bonbao")
+                        Text("Audit comptable - Freddy & Chez Tante Liesel")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }

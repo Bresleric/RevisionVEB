@@ -122,7 +122,7 @@ struct SampleDataGenerator {
                 status: status,
                 cycle: .fournisseurs,
                 sourceFile: "balance_juin_2026.csv",
-                restaurant: i % 2 == 0 ? .freddy : .bonbao
+                restaurant: i % 2 == 0 ? .freddy : .liesel
             )
             
             invoices.append(invoice)
@@ -191,7 +191,7 @@ struct SampleDataGenerator {
             errorCount: 1,
             timestamp: calendar.date(byAdding: .day, value: -1, to: today) ?? today,
             errorDetails: "1 facture illisible",
-            restaurant: .bonbao
+            restaurant: .liesel
         ))
         
         // Failed import

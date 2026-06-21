@@ -26,7 +26,7 @@ struct ImportView: View {
         // l'environnement est injecte dans .onAppear.
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try! ModelContainer(
-            for: Invoice.self, AuditResult.self, ImportLog.self, BalanceAccount.self,
+            for: Invoice.self, AuditResult.self, ImportLog.self, BalanceAccount.self, AccountCycleRule.self,
             configurations: config
         )
         _importManager = StateObject(wrappedValue: ImportManager(modelContext: ModelContext(container)))

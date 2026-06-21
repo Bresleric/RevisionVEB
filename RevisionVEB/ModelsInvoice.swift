@@ -85,5 +85,5 @@ enum AuditCycle: String, Codable, CaseIterable {
 
 enum Restaurant: String, Codable, CaseIterable {
     case freddy = "Freddy"
-    case bonbao = "Bonbao"
+    case liesel = "Chez Tante Liesel"
 }

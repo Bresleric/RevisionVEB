@@ -16,6 +16,7 @@ struct RevisionVEBApp: App {
             AuditResult.self,
             ImportLog.self,
             BalanceAccount.self,
+            AccountCycleRule.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -27,9 +28,9 @@ struct RevisionVEBApp: App {
         // ancien schema peut s'ouvrir mais echouer a la 1ere requete).
         func isHealthy(_ container: ModelContainer) -> Bool {
             let ctx = ModelContext(container)
-            var d = FetchDescriptor<ImportLog>()
-            d.fetchLimit = 1
-            return (try? ctx.fetch(d)) != nil
+            var logs = FetchDescriptor<ImportLog>();         logs.fetchLimit = 1
+            var rules = FetchDescriptor<AccountCycleRule>();  rules.fetchLimit = 1
+            return (try? ctx.fetch(logs)) != nil && (try? ctx.fetch(rules)) != nil
         }
 
         if let container = try? makeContainer(), isHealthy(container) {
