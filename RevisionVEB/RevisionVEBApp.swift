@@ -19,8 +19,33 @@ struct RevisionVEBApp: App {
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
+        func makeContainer() throws -> ModelContainer {
+            try ModelContainer(for: schema, configurations: [modelConfiguration])
+        }
+
+        // Verifie que le store est reellement lisible (une base corrompue ou d'un
+        // ancien schema peut s'ouvrir mais echouer a la 1ere requete).
+        func isHealthy(_ container: ModelContainer) -> Bool {
+            let ctx = ModelContext(container)
+            var d = FetchDescriptor<ImportLog>()
+            d.fetchLimit = 1
+            return (try? ctx.fetch(d)) != nil
+        }
+
+        if let container = try? makeContainer(), isHealthy(container) {
+            return container
+        }
+
+        // Store incompatible / corrompu -> on le supprime et on recree (dev : pas de donnee precieuse).
+        let url = modelConfiguration.url
+        let fm = FileManager.default
+        for suffix in ["", "-wal", "-shm"] {
+            try? fm.removeItem(at: URL(fileURLWithPath: url.path + suffix))
+        }
+        print("⚠️ Store reinitialise (schema incompatible ou corrompu).")
+
         do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
+            return try makeContainer()
         } catch {
             fatalError("Could not create ModelContainer: \(error)")
         }

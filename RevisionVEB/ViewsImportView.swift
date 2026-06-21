@@ -21,10 +21,15 @@ struct ImportView: View {
     @State private var showingExcelAlert = false
     
     init() {
-        // Note: modelContext sera injecté via environment
-        let container = try! ModelContainer(for: Invoice.self)
-        let context = ModelContext(container)
-        _importManager = StateObject(wrappedValue: ImportManager(modelContext: context))
+        // Placeholder EN MEMOIRE uniquement : ne doit JAMAIS toucher le store disque
+        // de l'app (sinon conflit de schema -> corruption). Le vrai modelContext de
+        // l'environnement est injecte dans .onAppear.
+        let config = ModelConfiguration(isStoredInMemoryOnly: true)
+        let container = try! ModelContainer(
+            for: Invoice.self, AuditResult.self, ImportLog.self, BalanceAccount.self,
+            configurations: config
+        )
+        _importManager = StateObject(wrappedValue: ImportManager(modelContext: ModelContext(container)))
     }
     
     var body: some View {
