@@ -12,7 +12,10 @@ import SwiftData
 struct RevisionVEBApp: App {
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            Invoice.self,
+            AuditResult.self,
+            ImportLog.self,
+            BalanceAccount.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -28,5 +31,13 @@ struct RevisionVEBApp: App {
             ContentView()
         }
         .modelContainer(sharedModelContainer)
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Nouveau import...") {
+                    // TODO: Show import window
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
+        }
     }
 }
