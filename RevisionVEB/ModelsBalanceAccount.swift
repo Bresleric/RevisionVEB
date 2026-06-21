@@ -64,4 +64,89 @@ final class BalanceAccount {
     var isBanque: Bool {
         accountNumber.hasPrefix("51") || accountNumber.hasPrefix("53")
     }
+
+    /// Cycle de revision auquel ce compte appartient (deduit du numero de compte)
+    var cycle: RevisionCycle {
+        RevisionCycle.forAccount(accountNumber)
+    }
+}
+
+// MARK: - Cycles de revision
+
+/// Les cycles de revision comptable. Chaque compte est range dans un cycle
+/// selon sa classe (prefixe du numero de compte), selon le Plan Comptable General.
+enum RevisionCycle: String, Codable, CaseIterable, Identifiable {
+    case capitaux               = "A - Capitaux & Financement"
+    case immobilisations        = "B - Immobilisations"
+    case stocks                 = "C - Stocks"
+    case clients                = "D - Clients & Ventes"
+    case fournisseurs           = "E - Fournisseurs & Achats"
+    case fiscal                 = "F - État & Fiscal"
+    case personnel              = "G - Personnel & Social"
+    case tresorerie             = "H - Trésorerie"
+    case tiersDivers            = "I - Comptes de tiers divers"
+    case autresChargesProduits  = "J - Autres charges & produits"
+    case nonClasse              = "Z - Non classé"
+
+    var id: String { rawValue }
+
+    /// Lettre du cycle (A, B, C...)
+    var letter: String { String(rawValue.prefix(1)) }
+
+    /// Nom court sans la lettre (ex: "Trésorerie")
+    var shortName: String {
+        guard let range = rawValue.range(of: " - ") else { return rawValue }
+        return String(rawValue[range.upperBound...])
+    }
+
+    var icon: String {
+        switch self {
+        case .capitaux:              return "building.columns"
+        case .immobilisations:       return "wrench.and.screwdriver"
+        case .stocks:                return "shippingbox"
+        case .clients:               return "person.crop.circle.badge.checkmark"
+        case .fournisseurs:          return "building.2"
+        case .fiscal:                return "doc.text"
+        case .personnel:             return "person.2"
+        case .tresorerie:            return "banknote"
+        case .tiersDivers:           return "person.2.badge.gearshape"
+        case .autresChargesProduits: return "arrow.left.arrow.right"
+        case .nonClasse:             return "questionmark.folder"
+        }
+    }
+
+    /// Determine le cycle a partir du numero de compte (classe PCG).
+    static func forAccount(_ accountNumber: String) -> RevisionCycle {
+        let trimmed = accountNumber.trimmingCharacters(in: .whitespaces)
+        let p1 = String(trimmed.prefix(1))
+        let p2 = String(trimmed.prefix(2))
+
+        switch p1 {
+        case "1": return .capitaux          // 10-18 : capitaux propres, emprunts
+        case "2": return .immobilisations   // 20-28 : immos & amortissements
+        case "3": return .stocks            // 3x : stocks
+        case "5": return .tresorerie        // 5x : banques, caisse, virements
+        case "4":
+            switch p2 {
+            case "40": return .fournisseurs
+            case "41": return .clients
+            case "42", "43": return .personnel
+            case "44": return .fiscal
+            default:   return .tiersDivers  // 45, 46, 47, 48, 49
+            }
+        case "6":
+            switch p2 {
+            case "60", "61", "62": return .fournisseurs
+            case "63": return .fiscal
+            case "64": return .personnel
+            default:   return .autresChargesProduits // 65-69
+            }
+        case "7":
+            switch p2 {
+            case "70", "71", "72", "74": return .clients
+            default:   return .autresChargesProduits // 75-79
+            }
+        default: return .nonClasse
+        }
+    }
 }

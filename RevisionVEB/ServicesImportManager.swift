@@ -140,142 +140,196 @@ final class ImportManager: ObservableObject {
         )
     }
     
-    // MARK: - Import Excel (simulation CSV)
-    
-    func importBalanceExcel(url: URL, restaurant: Restaurant) async -> ImportLog {
-        print("📊 ImportManager.importBalanceExcel appelé")
-        print("📁 Fichier: \(url.lastPathComponent)")
-        print("🏪 Restaurant: \(restaurant.rawValue)")
-        print("📍 Chemin complet: \(url.path)")
-        
+    // MARK: - Import Balance comptable (CSV / TXT)
+
+    func importBalance(url: URL, restaurant: Restaurant) async -> ImportLog {
+        print("📊 ImportManager.importBalance: \(url.lastPathComponent)")
+
         isImporting = true
         importProgress = 0.0
-        
+
         let log = ImportLog(
             fileName: url.lastPathComponent,
             fileType: .balanceExcel,
             restaurant: restaurant
         )
-        
-        // Vérifier si le fichier existe
-        let fileManager = FileManager.default
-        if !fileManager.fileExists(atPath: url.path) {
-            print("❌ Le fichier n'existe pas à ce chemin")
+
+        guard FileManager.default.fileExists(atPath: url.path) else {
             log.status = .failed
-            log.errorDetails = "Fichier introuvable"
+            log.errorDetails = "Fichier introuvable (s'il est dans iCloud/OneDrive, telecharge-le d'abord)."
+            modelContext.insert(log); try? modelContext.save()
             isImporting = false
             return log
         }
-        
-        // Détecter le type de fichier
+
         let ext = url.pathExtension.lowercased()
-        
         if ext == "xlsx" || ext == "xls" {
-            // Pour les fichiers Excel, demander à l'utilisateur d'exporter en CSV/TXT
-            print("⚠️ Fichier Excel détecté - veuillez exporter en CSV pour l'instant")
             log.status = .failed
-            log.errorDetails = "Format Excel non supporté. Veuillez exporter votre fichier en format CSV ou TXT."
-            isImporting = false
-            return log
-        } else {
-            // Parser CSV/TXT
-            return await importTextFile(url: url, restaurant: restaurant, log: log)
-        }
-    }
-    
-    // MARK: - Import fichier texte (CSV/TXT)
-    
-    private func importTextFile(url: URL, restaurant: Restaurant, log: ImportLog) async -> ImportLog {
-        
-        // Lecture fichier texte (CSV ou tab-separated)
-        // Essayer plusieurs encodages
-        var content: String?
-        let encodings: [String.Encoding] = [.utf8, .utf16, .windowsCP1252, .macOSRoman, .isoLatin1]
-        
-        for encoding in encodings {
-            do {
-                content = try String(contentsOf: url, encoding: encoding)
-                print("✅ Fichier lu avec encodage \(encoding): \(content!.count) caractères")
-                break
-            } catch {
-                print("⚠️ Échec avec encodage \(encoding): \(error.localizedDescription)")
-                continue
-            }
-        }
-        
-        guard let fileContent = content else {
-            print("❌ Impossible de lire le fichier avec aucun encodage")
-            log.status = .failed
-            log.errorDetails = "Format de fichier non reconnu"
+            log.errorDetails = "Format Excel pas encore active. Exporte en CSV pour l'instant — le .xlsx natif arrive juste apres."
+            modelContext.insert(log); try? modelContext.save()
             isImporting = false
             return log
         }
-        
-        return await processBalanceContent(content: fileContent, fileName: url.lastPathComponent, restaurant: restaurant, log: log)
+
+        guard let content = readTextWithBestEncoding(url: url) else {
+            log.status = .failed
+            log.errorDetails = "Impossible de lire le fichier (encodage non reconnu)."
+            modelContext.insert(log); try? modelContext.save()
+            isImporting = false
+            return log
+        }
+
+        return await processBalance(content: content, fileName: url.lastPathComponent, restaurant: restaurant, log: log)
     }
     
-    private func processBalanceContent(content: String, fileName: String, restaurant: Restaurant, log: ImportLog) async -> ImportLog {
-        let lines = content.components(separatedBy: .newlines)
-        print("📝 Nombre de lignes: \(lines.count)")
-        
-        var successCount = 0
-        var errorCount = 0
-        
-        // Skip header
-        for line in lines.dropFirst() where !line.isEmpty {
-            let columns = line.components(separatedBy: "\t").map { $0.trimmingCharacters(in: .whitespaces) }
-            
-            print("🔍 Ligne: \(columns.count) colonnes - \(columns.joined(separator: " | "))")
-            
-            // Format attendu: Date | N° | Fournisseur | Code | Net | TVA | Gross
-            if columns.count >= 7 {
-                let dateFormatter = DateFormatter()
-                dateFormatter.dateFormat = "dd/MM/yyyy"
-                
-                if let date = dateFormatter.date(from: columns[0]),
-                   let net = Double(columns[4].replacingOccurrences(of: ",", with: ".")),
-                   let vatRate = Double(columns[5].replacingOccurrences(of: ",", with: ".")),
-                   let gross = Double(columns[6].replacingOccurrences(of: ",", with: ".")) {
-                    
-                    let invoice = Invoice(
-                        number: columns[1],
-                        date: date,
-                        supplier: columns[2],
-                        supplierCode: columns[3],
-                        netAmount: net,
-                        vatRate: vatRate,
-                        grossAmount: gross,
-                        cycle: .fournisseurs,
-                        sourceFile: fileName,
-                        restaurant: restaurant
-                    )
-                    
-                    modelContext.insert(invoice)
-                    successCount += 1
-                    print("✅ Facture importée: \(columns[1])")
-                } else {
-                    errorCount += 1
-                    print("❌ Erreur parsing: date=\(columns[0]), net=\(columns[4]), vat=\(columns[5]), gross=\(columns[6])")
-                }
-            } else {
-                errorCount += 1
-                print("❌ Pas assez de colonnes: \(columns.count)")
+    // MARK: - Lecture texte (detection auto de l'encodage)
+
+    /// Lit le fichier en essayant plusieurs encodages, et garde celui dont
+    /// l'en-tete contient le plus de mots-cles comptables. Gere CSV (UTF-8/BOM),
+    /// TXT Mac Roman, Windows-1252, etc.
+    private func readTextWithBestEncoding(url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let encodings: [String.Encoding] = [.utf8, .macOSRoman, .windowsCP1252, .isoLatin1, .utf16]
+        var best: (text: String, score: Int)? = nil
+        for enc in encodings {
+            guard let s = String(data: data, encoding: enc) else { continue }
+            let score = Self.headerScore(s)
+            if best == nil || score > best!.score { best = (s, score) }
+            if score >= 4 { break } // en-tete clairement reconnu
+        }
+        return best?.text.replacingOccurrences(of: "\u{FEFF}", with: "")
+    }
+
+    private static func fold(_ s: String) -> String {
+        s.folding(options: .diacriticInsensitive, locale: Locale(identifier: "fr_FR")).lowercased()
+    }
+
+    private static func headerScore(_ content: String) -> Int {
+        let first = content.replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n").first ?? ""
+        let f = fold(first)
+        return ["compte", "debit", "credit", "solde", "intitul"].reduce(0) { $0 + (f.contains($1) ? 1 : 0) }
+    }
+
+    /// Parse un montant a la francaise : espaces (milliers), virgule decimale,
+    /// zero-padding ("000" -> 0, "011" -> 11, "-54 054" -> -54054).
+    static func parseFrenchAmount(_ raw: String) -> Double? {
+        var s = raw
+        for sp in ["\u{00A0}", "\u{202F}", "\u{2009}", " "] { s = s.replacingOccurrences(of: sp, with: "") }
+        s = s.replacingOccurrences(of: "€", with: "")
+             .replacingOccurrences(of: ",", with: ".")
+             .trimmingCharacters(in: .whitespaces)
+        if s.isEmpty { return nil }
+        return Double(s)
+    }
+
+    private struct BalanceColumns {
+        var compte = -1, code = -1, intitule = -1, debit = -1, credit = -1, soldeN = -1, soldeN1 = -1
+    }
+
+    private static func detectSeparator(_ headerLine: String) -> String {
+        if headerLine.contains("\t") { return "\t" }
+        if headerLine.contains(";") { return ";" }
+        if headerLine.contains(",") { return "," }
+        return ";"
+    }
+
+    private static func detectColumns(_ header: [String]) -> BalanceColumns {
+        var m = BalanceColumns()
+        for (i, raw) in header.enumerated() {
+            let c = fold(raw)
+            if c.contains("compte") && m.compte < 0 { m.compte = i }
+            else if (c.contains("appel") || c.contains("cle")) && m.code < 0 { m.code = i }
+            else if (c.contains("intitul") || c.contains("libell")) && m.intitule < 0 { m.intitule = i }
+            else if c.contains("debit") && m.debit < 0 { m.debit = i }
+            else if c.contains("credit") && m.credit < 0 { m.credit = i }
+            else if (c.contains("n-1") || c.contains("n - 1")) && m.soldeN1 < 0 { m.soldeN1 = i }
+            else if c.contains("n-2") || c.contains("n - 2") { /* ignore le solde N-2 */ }
+            else if c.contains("solde") && m.soldeN < 0 { m.soldeN = i }
+        }
+        return m
+    }
+
+    // MARK: - Traitement de la balance -> BalanceAccount
+
+    private func processBalance(content: String, fileName: String, restaurant: Restaurant, log: ImportLog) async -> ImportLog {
+        // Normalise les fins de ligne (\r seul, \r\n, \n)
+        let normalized = content
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+
+        guard let headerLine = lines.first else {
+            log.status = .failed
+            log.errorDetails = "Fichier vide."
+            modelContext.insert(log); try? modelContext.save()
+            isImporting = false
+            return log
+        }
+
+        let sep = Self.detectSeparator(headerLine)
+        let header = headerLine.components(separatedBy: sep).map { $0.trimmingCharacters(in: .whitespaces) }
+        let cols = Self.detectColumns(header)
+
+        guard cols.compte >= 0 else {
+            log.status = .failed
+            log.errorDetails = "Colonne 'Compte' introuvable dans l'en-tete."
+            modelContext.insert(log); try? modelContext.save()
+            isImporting = false
+            return log
+        }
+
+        // Remplace la balance precedente du meme etablissement
+        if let existing = try? modelContext.fetch(FetchDescriptor<BalanceAccount>()) {
+            for acc in existing where acc.restaurant == restaurant {
+                modelContext.delete(acc)
             }
         }
-        
-        print("📊 Résultat: \(successCount) réussis, \(errorCount) erreurs")
-        
-        log.recordsCount = successCount + errorCount
-        log.successCount = successCount
-        log.errorCount = errorCount
-        log.status = errorCount == 0 ? .success : .partialSuccess
-        
+
+        func value(_ row: [String], _ idx: Int) -> String {
+            (idx >= 0 && idx < row.count) ? row[idx] : ""
+        }
+
+        var success = 0
+        var skipped = 0
+        let total = max(lines.count - 1, 1)
+
+        for (i, line) in lines.dropFirst().enumerated() {
+            let row = line.components(separatedBy: sep).map { $0.trimmingCharacters(in: .whitespaces) }
+            let compte = value(row, cols.compte)
+            if compte.isEmpty { skipped += 1; continue }
+            // Exclure les lignes de sous-total / total (ex: 10ZZZZZZZZ, 5ZZZZZZZZZ)
+            if compte.uppercased().contains("ZZZ") { skipped += 1; continue }
+
+            let account = BalanceAccount(
+                accountNumber: compte,
+                accountCode: value(row, cols.code),
+                accountLabel: value(row, cols.intitule),
+                debit: Self.parseFrenchAmount(value(row, cols.debit)) ?? 0,
+                credit: Self.parseFrenchAmount(value(row, cols.credit)) ?? 0,
+                balanceN: Self.parseFrenchAmount(value(row, cols.soldeN)) ?? 0,
+                balanceNMinus1: Self.parseFrenchAmount(value(row, cols.soldeN1)) ?? 0,
+                restaurant: restaurant,
+                sourceFile: fileName
+            )
+            modelContext.insert(account)
+            success += 1
+            if i % 25 == 0 { importProgress = Double(i) / Double(total) }
+        }
+
+        log.recordsCount = success
+        log.successCount = success
+        log.errorCount = 0
+        log.status = success > 0 ? .success : .failed
+        if success == 0 { log.errorDetails = "Aucun compte detecte dans le fichier." }
         modelContext.insert(log)
         try? modelContext.save()
-        
+
         isImporting = false
         importProgress = 1.0
-        
+        print("📊 Balance importee: \(success) comptes (\(skipped) lignes ignorees)")
         return log
     }
 }

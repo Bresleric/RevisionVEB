@@ -10,8 +10,8 @@ import SwiftData
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
-    @State private var selectedSection: NavigationSection? = .dashboard
-    
+    @State private var selectedSection: NavSection? = .dashboard
+
     var body: some View {
         NavigationSplitView {
             SidebarView(selectedSection: $selectedSection)
@@ -24,26 +24,36 @@ struct ContentView: View {
 
 // MARK: - Navigation Section
 
-enum NavigationSection: String, CaseIterable, Identifiable {
-    case dashboard = "Dashboard"
-    case importData = "Import"
-    case cycleTresorerie = "B - Trésorerie"
-    case cycleFournisseurs = "E - Fournisseurs"
-    case cyclePersonnel = "H - Personnel"
-    case cycleFiscal = "I - Fiscal"
-    case settings = "Réglages"
-    
-    var id: String { rawValue }
-    
+enum NavSection: Hashable, Identifiable {
+    case dashboard
+    case importData
+    case cycle(RevisionCycle)
+    case settings
+
+    var id: String {
+        switch self {
+        case .dashboard:        return "dashboard"
+        case .importData:       return "import"
+        case .cycle(let c):     return "cycle-\(c.rawValue)"
+        case .settings:         return "settings"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .dashboard:        return "Dashboard"
+        case .importData:       return "Import"
+        case .cycle(let c):     return c.rawValue
+        case .settings:         return "Réglages"
+        }
+    }
+
     var icon: String {
         switch self {
-        case .dashboard: return "gauge.with.dots.needle.67percent"
-        case .importData: return "arrow.down.doc"
-        case .cycleTresorerie: return "banknote"
-        case .cycleFournisseurs: return "building.2"
-        case .cyclePersonnel: return "person.2"
-        case .cycleFiscal: return "doc.text"
-        case .settings: return "gearshape"
+        case .dashboard:        return "gauge.with.dots.needle.67percent"
+        case .importData:       return "arrow.down.doc"
+        case .cycle(let c):     return c.icon
+        case .settings:         return "gearshape"
         }
     }
 }
@@ -51,50 +61,43 @@ enum NavigationSection: String, CaseIterable, Identifiable {
 // MARK: - Sidebar
 
 struct SidebarView: View {
-    @Binding var selectedSection: NavigationSection?
-    
+    @Binding var selectedSection: NavSection?
+
+    private let cycles = RevisionCycle.allCases.filter { $0 != .nonClasse }
+
     var body: some View {
         List(selection: $selectedSection) {
             Section("Vue d'ensemble") {
-                NavigationLink(value: NavigationSection.dashboard) {
-                    Label(NavigationSection.dashboard.rawValue, systemImage: NavigationSection.dashboard.icon)
-                }
-                NavigationLink(value: NavigationSection.importData) {
-                    Label(NavigationSection.importData.rawValue, systemImage: NavigationSection.importData.icon)
+                row(.dashboard)
+                row(.importData)
+            }
+
+            Section("Cycles de révision") {
+                ForEach(cycles) { cycle in
+                    row(.cycle(cycle))
                 }
             }
-            
-            Section("Cycles comptables") {
-                NavigationLink(value: NavigationSection.cycleTresorerie) {
-                    Label(NavigationSection.cycleTresorerie.rawValue, systemImage: NavigationSection.cycleTresorerie.icon)
-                }
-                NavigationLink(value: NavigationSection.cycleFournisseurs) {
-                    Label(NavigationSection.cycleFournisseurs.rawValue, systemImage: NavigationSection.cycleFournisseurs.icon)
-                }
-                NavigationLink(value: NavigationSection.cyclePersonnel) {
-                    Label(NavigationSection.cyclePersonnel.rawValue, systemImage: NavigationSection.cyclePersonnel.icon)
-                }
-                NavigationLink(value: NavigationSection.cycleFiscal) {
-                    Label(NavigationSection.cycleFiscal.rawValue, systemImage: NavigationSection.cycleFiscal.icon)
-                }
-            }
-            
+
             Section {
-                NavigationLink(value: NavigationSection.settings) {
-                    Label(NavigationSection.settings.rawValue, systemImage: NavigationSection.settings.icon)
-                }
+                row(.settings)
             }
         }
         .navigationTitle("PLANB Audit")
-        .navigationSplitViewColumnWidth(min: 200, ideal: 240)
+        .navigationSplitViewColumnWidth(min: 220, ideal: 260)
+    }
+
+    private func row(_ section: NavSection) -> some View {
+        NavigationLink(value: section) {
+            Label(section.title, systemImage: section.icon)
+        }
     }
 }
 
 // MARK: - Detail Content
 
 struct DetailContentView: View {
-    let section: NavigationSection?
-    
+    let section: NavSection?
+
     var body: some View {
         Group {
             switch section {
@@ -102,14 +105,8 @@ struct DetailContentView: View {
                 DashboardView()
             case .importData:
                 ImportView()
-            case .cycleFournisseurs:
-                CycleFournisseursView()
-            case .cycleTresorerie:
-                PlaceholderView(title: "Cycle B - Trésorerie", message: "À implémenter en Phase 2")
-            case .cyclePersonnel:
-                PlaceholderView(title: "Cycle H - Personnel", message: "À implémenter en Phase 2")
-            case .cycleFiscal:
-                PlaceholderView(title: "Cycle I - Fiscal", message: "À implémenter en Phase 2")
+            case .cycle(let cycle):
+                CycleBalanceView(cycle: cycle)
             case .settings:
                 SettingsView()
             case .none:
@@ -117,6 +114,104 @@ struct DetailContentView: View {
             }
         }
     }
+}
+
+// MARK: - Vue Balance par cycle
+
+struct CycleBalanceView: View {
+    let cycle: RevisionCycle
+
+    @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
+
+    private var accounts: [BalanceAccount] {
+        allAccounts.filter { $0.cycle == cycle }
+    }
+
+    private var totalDebit: Double { accounts.reduce(0) { $0 + $1.debit } }
+    private var totalCredit: Double { accounts.reduce(0) { $0 + $1.credit } }
+    private var totalSoldeN: Double { accounts.reduce(0) { $0 + $1.balanceN } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // En-tete
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 12) {
+                    Image(systemName: cycle.icon)
+                        .font(.title2)
+                        .foregroundStyle(.blue)
+                    Text("Cycle \(cycle.rawValue)")
+                        .font(.largeTitle).fontWeight(.bold)
+                    Spacer()
+                }
+                HStack(spacing: 16) {
+                    statChip(label: "Comptes", value: "\(accounts.count)")
+                    statChip(label: "Total débit", value: formatEuro(totalDebit))
+                    statChip(label: "Total crédit", value: formatEuro(totalCredit))
+                    statChip(label: "Solde N", value: formatEuro(totalSoldeN))
+                }
+            }
+            .padding()
+
+            Divider()
+
+            if accounts.isEmpty {
+                if allAccounts.isEmpty {
+                    PlaceholderView(title: "Aucune balance importée",
+                                    message: "Va dans Import et charge ta balance (CSV/TXT) — les comptes de ce cycle s'afficheront ici.")
+                } else {
+                    PlaceholderView(title: "Aucun compte dans ce cycle",
+                                    message: "La balance importée ne contient pas de compte rattaché au cycle \(cycle.letter).")
+                }
+            } else {
+                Table(accounts) {
+                    TableColumn("Compte") { acc in
+                        Text(acc.accountNumber).monospaced()
+                    }
+                    .width(90)
+                    TableColumn("Intitulé") { acc in
+                        Text(acc.accountLabel.isEmpty ? acc.accountCode : acc.accountLabel)
+                    }
+                    TableColumn("Débit") { acc in
+                        Text(formatEuro(acc.debit)).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    .width(110)
+                    TableColumn("Crédit") { acc in
+                        Text(formatEuro(acc.credit)).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    .width(110)
+                    TableColumn("Solde N") { acc in
+                        Text(formatEuro(acc.balanceN)).monospacedDigit()
+                            .foregroundStyle(acc.balanceN < 0 ? .red : .primary)
+                    }
+                    .width(110)
+                    TableColumn("Solde N-1") { acc in
+                        Text(formatEuro(acc.balanceNMinus1)).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    .width(110)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func statChip(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.headline).monospacedDigit()
+        }
+        .padding(.horizontal, 12).padding(.vertical, 6)
+        .background(Color.gray.opacity(0.1))
+        .cornerRadius(8)
+    }
+}
+
+/// Formatage monetaire francais (milliers espaces, 0 decimale).
+func formatEuro(_ value: Double) -> String {
+    let f = NumberFormatter()
+    f.numberStyle = .decimal
+    f.maximumFractionDigits = 0
+    f.groupingSeparator = "\u{00A0}"
+    return (f.string(from: NSNumber(value: value)) ?? "0") + " €"
 }
 
 // MARK: - Placeholder

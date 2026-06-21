@@ -250,16 +250,16 @@ struct ImportView: View {
             print("📋 Import PDF...")
             _ = await importManager.importInvoicePDF(url: url, restaurant: selectedRestaurant)
         } else if ext == "csv" || ext == "tsv" || ext == "txt" {
-            print("📊 Import CSV/TSV/TXT...")
-            _ = await importManager.importBalanceExcel(url: url, restaurant: selectedRestaurant)
+            print("📊 Import balance CSV/TSV/TXT...")
+            _ = await importManager.importBalance(url: url, restaurant: selectedRestaurant)
         } else if ext == "xlsx" || ext == "xls" {
-            print("⚠️ Excel natif non supporté")
+            print("⚠️ Excel natif pas encore activé")
             await MainActor.run {
                 showingExcelAlert = true
             }
         } else {
-            print("📊 Import par défaut (CSV/TSV)...")
-            _ = await importManager.importBalanceExcel(url: url, restaurant: selectedRestaurant)
+            print("📊 Import par défaut (balance CSV/TSV)...")
+            _ = await importManager.importBalance(url: url, restaurant: selectedRestaurant)
         }
         
         print("✅ Traitement terminé")
