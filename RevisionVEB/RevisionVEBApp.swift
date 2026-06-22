@@ -43,13 +43,21 @@ struct RevisionVEBApp: App {
             return container
         }
 
-        // Store incompatible / corrompu -> on le supprime et on recree (dev : pas de donnee precieuse).
+        // Store incompatible/corrompu : on NE SUPPRIME JAMAIS. On SAUVEGARDE la base
+        // (deplacement dans Backups/) puis on recree une base vierge. Les donnees
+        // restent recuperables a partir de la sauvegarde.
         let url = modelConfiguration.url
         let fm = FileManager.default
+        let backupDir = url.deletingLastPathComponent().appendingPathComponent("Backups", isDirectory: true)
+        try? fm.createDirectory(at: backupDir, withIntermediateDirectories: true)
+        let stamp = String(Int(Date().timeIntervalSince1970))
         for suffix in ["", "-wal", "-shm"] {
-            try? fm.removeItem(at: URL(fileURLWithPath: url.path + suffix))
+            let src = URL(fileURLWithPath: url.path + suffix)
+            guard fm.fileExists(atPath: src.path) else { continue }
+            let dst = backupDir.appendingPathComponent("\(src.lastPathComponent).\(stamp).bak")
+            try? fm.moveItem(at: src, to: dst)
         }
-        print("⚠️ Store reinitialise (schema incompatible ou corrompu).")
+        print("⚠️ Store incompatible : sauvegardé dans Backups/ puis recréé. Données récupérables.")
 
         do {
             return try makeContainer()

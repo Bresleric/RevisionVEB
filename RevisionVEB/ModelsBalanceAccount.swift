@@ -331,12 +331,12 @@ final class ReconItem {
     var id: UUID
     var exerciceID: UUID
     var accountNumber: String
-    var libelle: String
-    var montant: Double
-    var ordre: Int
-    var docName: String
-    var docPath: String
-    var docBookmark: Data?
+    var libelle: String = ""
+    var montant: Double = 0
+    var ordre: Int = 0
+    var docName: String = ""
+    var docPath: String = ""
+    var docBookmark: Data? = nil
 
     init(id: UUID = UUID(), exerciceID: UUID, accountNumber: String,
          libelle: String = "", montant: Double = 0, ordre: Int = 0,
