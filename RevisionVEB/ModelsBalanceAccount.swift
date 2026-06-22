@@ -307,6 +307,45 @@ final class AccountJustification {
     var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
 }
 
+/// Rapprochement bancaire d'un compte (par exercice) : solde extrait + note.
+@Model
+final class BankReconciliation {
+    var exerciceID: UUID
+    var accountNumber: String
+    var soldeExtrait: Double?
+    var note: String
+    var updatedAt: Date
+
+    init(exerciceID: UUID, accountNumber: String, soldeExtrait: Double? = nil, note: String = "", updatedAt: Date = Date()) {
+        self.exerciceID = exerciceID
+        self.accountNumber = accountNumber
+        self.soldeExtrait = soldeExtrait
+        self.note = note
+        self.updatedAt = updatedAt
+    }
+}
+
+/// Element (ecriture) de rapprochement : libelle + montant signe.
+@Model
+final class ReconItem {
+    var id: UUID
+    var exerciceID: UUID
+    var accountNumber: String
+    var libelle: String
+    var montant: Double
+    var ordre: Int
+
+    init(id: UUID = UUID(), exerciceID: UUID, accountNumber: String,
+         libelle: String = "", montant: Double = 0, ordre: Int = 0) {
+        self.id = id
+        self.exerciceID = exerciceID
+        self.accountNumber = accountNumber
+        self.libelle = libelle
+        self.montant = montant
+        self.ordre = ordre
+    }
+}
+
 /// Etat d'un point de controle (statut + observation), par exercice et par cycle.
 @Model
 final class ControlState {

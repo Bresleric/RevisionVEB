@@ -359,18 +359,22 @@ struct CycleBalanceView: View {
                 }
                 Picker("", selection: $tab) {
                     Text("Comptes (\(accounts.count))").tag(0)
-                    Text("Contrôles").tag(1)
+                    if cycle == .tresorerie { Text("Rapprochements").tag(1) }
+                    Text("Contrôles").tag(2)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 260)
+                .frame(width: cycle == .tresorerie ? 380 : 280)
                 .padding(.top, 4)
             }
             .padding()
 
             Divider()
 
-            if tab == 1 {
+            if tab == 2 {
                 CycleControlsView(cycle: cycle, exerciceID: exerciceID)
+            } else if tab == 1 && cycle == .tresorerie {
+                CycleReconciliationView(exerciceID: exerciceID,
+                                        bankAccounts: accounts.filter { $0.accountNumber.hasPrefix("51") })
             } else if accounts.isEmpty {
                 if exerciceAccounts.isEmpty {
                     PlaceholderView(title: "Aucune balance importée",
@@ -760,6 +764,181 @@ private struct SyntheseEditor: View {
             .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
             .onChange(of: local) { _, nv in onChange(nv) }
             .onAppear { if local.isEmpty { local = text } }
+    }
+}
+
+// MARK: - Rapprochements bancaires (cycle B)
+
+struct CycleReconciliationView: View {
+    let exerciceID: UUID
+    let bankAccounts: [BalanceAccount]
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 16) {
+                if bankAccounts.isEmpty {
+                    PlaceholderView(title: "Aucun compte bancaire",
+                                    message: "Les comptes 51x de cet exercice apparaîtront ici pour le rapprochement.")
+                } else {
+                    ForEach(bankAccounts) { acc in
+                        ReconciliationCard(account: acc, exerciceID: exerciceID)
+                    }
+                }
+            }
+            .padding()
+        }
+    }
+}
+
+private struct ReconciliationCard: View {
+    let account: BalanceAccount
+    let exerciceID: UUID
+
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allRecons: [BankReconciliation]
+    @Query private var allItems: [ReconItem]
+
+    @State private var soldeExtraitText = ""
+
+    private var recon: BankReconciliation? {
+        allRecons.first { $0.exerciceID == exerciceID && $0.accountNumber == account.accountNumber }
+    }
+    private var items: [ReconItem] {
+        allItems.filter { $0.exerciceID == exerciceID && $0.accountNumber == account.accountNumber }
+            .sorted { $0.ordre < $1.ordre }
+    }
+
+    private var soldeComptable: Double { account.balanceN }
+    private var soldeExtrait: Double? { recon?.soldeExtrait }
+    private var totalItems: Double { items.reduce(0) { $0 + $1.montant } }
+    private var ecartBrut: Double? { soldeExtrait.map { soldeComptable - $0 } }
+    private var residuel: Double? { ecartBrut.map { $0 - totalItems } }
+    private var rapproche: Bool { (residuel.map { abs($0) < 0.5 }) ?? false }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // En-tete compte
+            HStack {
+                Text(account.accountNumber).monospaced()
+                Text(account.accountLabel.isEmpty ? account.accountCode : account.accountLabel)
+                    .fontWeight(.semibold)
+                Spacer()
+                if soldeExtrait != nil {
+                    Label(rapproche ? "Rapproché" : "Écart résiduel",
+                          systemImage: rapproche ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(rapproche ? .green : .orange)
+                }
+            }
+
+            // Soldes
+            HStack(spacing: 24) {
+                labeled("Solde comptable", formatEuro(soldeComptable))
+                HStack(spacing: 6) {
+                    Text("Solde extrait").font(.caption).foregroundStyle(.secondary)
+                    TextField("—", text: $soldeExtraitText)
+                        .textFieldStyle(.roundedBorder).frame(width: 120)
+                        .multilineTextAlignment(.trailing).monospacedDigit()
+                        .onSubmit(commitExtrait)
+                }
+                if let e = ecartBrut {
+                    labeled("Écart à expliquer", formatEuroSigned(e))
+                }
+            }
+
+            Divider()
+
+            // Elements de rapprochement
+            Text("Éléments de rapprochement").font(.subheadline).fontWeight(.medium)
+            ForEach(items) { item in
+                ReconItemRow(item: item,
+                             onCommit: { try? modelContext.save() },
+                             onDelete: { modelContext.delete(item); try? modelContext.save() })
+            }
+            Button {
+                modelContext.insert(ReconItem(exerciceID: exerciceID, accountNumber: account.accountNumber,
+                                              ordre: items.count))
+                try? modelContext.save()
+            } label: { Label("Ajouter un élément", systemImage: "plus.circle") }
+                .buttonStyle(.borderless).font(.callout)
+
+            Divider()
+
+            // Synthese
+            HStack(spacing: 24) {
+                labeled("Total éléments", formatEuroSigned(totalItems))
+                if let r = residuel {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Écart résiduel").font(.caption).foregroundStyle(.secondary)
+                        Text(formatEuroSigned(r)).font(.headline).monospacedDigit()
+                            .foregroundStyle(abs(r) < 0.5 ? .green : .red)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(Color.gray.opacity(0.06))
+        .cornerRadius(10)
+        .onAppear {
+            soldeExtraitText = recon?.soldeExtrait.map { String(format: "%.0f", $0) } ?? ""
+        }
+    }
+
+    private func labeled(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.headline).monospacedDigit()
+        }
+    }
+
+    private func commitExtrait() {
+        let cleaned = soldeExtraitText
+            .replacingOccurrences(of: "\u{00A0}", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "€", with: "")
+            .replacingOccurrences(of: ",", with: ".")
+            .trimmingCharacters(in: .whitespaces)
+        let r = recon ?? {
+            let new = BankReconciliation(exerciceID: exerciceID, accountNumber: account.accountNumber)
+            modelContext.insert(new)
+            return new
+        }()
+        r.soldeExtrait = cleaned.isEmpty ? nil : Double(cleaned)
+        r.updatedAt = Date()
+        try? modelContext.save()
+    }
+}
+
+private struct ReconItemRow: View {
+    @Bindable var item: ReconItem
+    var onCommit: () -> Void
+    var onDelete: () -> Void
+    @State private var montantText = ""
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Libellé (ex : chèque non débité, virement en cours…)", text: $item.libelle)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: item.libelle) { _, _ in onCommit() }
+            TextField("± montant", text: $montantText)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 110).multilineTextAlignment(.trailing).monospacedDigit()
+                .onSubmit(commit)
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+        }
+        .onAppear { montantText = item.montant == 0 ? "" : String(format: "%.0f", item.montant) }
+    }
+
+    private func commit() {
+        let c = montantText
+            .replacingOccurrences(of: "\u{00A0}", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: ",", with: ".")
+            .trimmingCharacters(in: .whitespaces)
+        item.montant = Double(c) ?? 0
+        onCommit()
     }
 }
 
