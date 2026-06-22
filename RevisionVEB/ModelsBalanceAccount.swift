@@ -248,3 +248,153 @@ enum RevisionCycle: String, Codable, CaseIterable, Identifiable {
         return .nonClasse
     }
 }
+
+// MARK: - Controles de revision (feuille de travail par cycle)
+
+import SwiftUI
+
+enum ControlStatus: String, Codable, CaseIterable {
+    case aFaire    = "À faire"
+    case ok        = "OK"
+    case aVerifier = "À vérifier"
+    case anomalie  = "Anomalie"
+
+    var icon: String {
+        switch self {
+        case .aFaire:    return "circle"
+        case .ok:        return "checkmark.circle.fill"
+        case .aVerifier: return "exclamationmark.circle.fill"
+        case .anomalie:  return "xmark.octagon.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .aFaire:    return .secondary
+        case .ok:        return .green
+        case .aVerifier: return .orange
+        case .anomalie:  return .red
+        }
+    }
+}
+
+/// Etat d'un point de controle (statut + observation), par exercice et par cycle.
+@Model
+final class ControlState {
+    var exerciceID: UUID
+    var cycleRaw: String
+    var itemID: String
+    var statutRaw: String
+    var note: String
+    var updatedAt: Date
+
+    init(exerciceID: UUID, cycleRaw: String, itemID: String,
+         statut: ControlStatus = .aFaire, note: String = "", updatedAt: Date = Date()) {
+        self.exerciceID = exerciceID
+        self.cycleRaw = cycleRaw
+        self.itemID = itemID
+        self.statutRaw = statut.rawValue
+        self.note = note
+        self.updatedAt = updatedAt
+    }
+
+    var statut: ControlStatus {
+        get { ControlStatus(rawValue: statutRaw) ?? .aFaire }
+        set { statutRaw = newValue.rawValue }
+    }
+}
+
+// MARK: - Catalogue des controles (la liste type cabinet, par cycle)
+
+struct ControlItem: Identifiable { let id: String; let libelle: String }
+struct ControlGroup: Identifiable { let id: String; let titre: String; let items: [ControlItem] }
+
+enum RevisionControls {
+    /// Construit un groupe avec des itemID stables (lettre du cycle + index).
+    private static func grp(_ letter: String, _ gi: Int, _ titre: String, _ libelles: [String]) -> ControlGroup {
+        ControlGroup(
+            id: "\(letter)\(gi)",
+            titre: titre,
+            items: libelles.enumerated().map { ControlItem(id: "\(letter)\(gi)-\($0.offset)", libelle: $0.element) }
+        )
+    }
+
+    static func groups(for cycle: RevisionCycle) -> [ControlGroup] {
+        let L = cycle.letter
+        switch cycle {
+        case .tresorerie:
+            return [
+                grp(L, 0, "Trésorerie", ["Rapprochements bancaires", "Contrôle des chèques en circulation",
+                    "Vérification des virements de fin d'exercice", "Contrôle des soldes bancaires", "Justification des caisses"]),
+                grp(L, 1, "Emprunts", ["Vérification des tableaux d'amortissement", "Contrôle du capital restant dû",
+                    "Contrôle des intérêts courus", "Contrôle des échéances à moins d'un an"]),
+            ]
+        case .clients:
+            return [
+                grp(L, 0, "Ventes", ["Cohérence CA N/N-1", "Contrôle des marges", "Contrôle des avoirs"]),
+                grp(L, 1, "Clients", ["Balance âgée", "Analyse des retards de paiement", "Contrôle des créances douteuses",
+                    "Vérification des provisions", "Contrôle des comptes créditeurs clients"]),
+            ]
+        case .regularisation:
+            return [
+                grp(L, 0, "Charges constatées d'avance", ["Contrats couvrant plusieurs exercices", "Assurances", "Abonnements", "Loyers"]),
+                grp(L, 1, "Produits constatés d'avance", ["Prestations non réalisées", "Abonnements facturés d'avance"]),
+                grp(L, 2, "FNP / PAR", ["Vérification de l'exhaustivité", "Rattachement à l'exercice"]),
+            ]
+        case .fournisseurs:
+            return [
+                grp(L, 0, "Achats", ["Cohérence avec l'activité", "Contrôle des variations de charges"]),
+                grp(L, 1, "Fournisseurs", ["Justification des soldes", "Recherche des FNP", "Contrôle des soldes débiteurs",
+                    "Vérification des factures post-clôture"]),
+            ]
+        case .stocks:
+            return [
+                grp(L, 0, "Existence", ["Inventaire physique", "Contrôle des écarts"]),
+                grp(L, 1, "Valorisation", ["CMP ou FIFO", "Contrôle des coûts unitaires", "Stocks obsolètes", "Dépréciations"]),
+                grp(L, 2, "Restaurant", ["Inventaire boissons", "Inventaire matières premières", "Contrôle du taux de marge", "Contrôle du ratio matières"]),
+            ]
+        case .immobilisations:
+            return [
+                grp(L, 0, "Acquisitions", ["Factures d'investissement", "Distinction charge / immo"]),
+                grp(L, 1, "Amortissements", ["Recalcul", "Durées d'amortissement", "Contrôle des sorties"]),
+                grp(L, 2, "Existence", ["Contrôle physique des biens significatifs"]),
+            ]
+        case .personnel:
+            return [
+                grp(L, 0, "Paie", ["Réconciliation paie / comptabilité", "Contrôle des OD de paie"]),
+                grp(L, 1, "Social", ["Contrôle URSSAF", "Congés payés", "Primes à payer", "Charges sociales à payer"]),
+            ]
+        case .fiscal:
+            return [
+                grp(L, 0, "TVA", ["Concordance CA / TVA collectée", "Contrôle TVA déductible", "Vérification des CA3"]),
+                grp(L, 1, "IS", ["Recalcul du résultat fiscal", "Contrôle des réintégrations et déductions"]),
+                grp(L, 2, "Autres impôts", ["CFE", "Taxe d'apprentissage", "Formation professionnelle", "Participation construction"]),
+            ]
+        case .provisions:
+            return [
+                grp(L, 0, "Risques", ["Litiges", "Prud'hommes", "Contentieux fournisseurs"]),
+                grp(L, 1, "Charges", ["Prime exceptionnelle", "Gros entretien"]),
+                grp(L, 2, "Contrôles", ["Justification documentaire", "Recalcul", "Vérification de la probabilité du risque"]),
+            ]
+        case .capitaux:
+            return [
+                grp(L, 0, "Contrôles", ["Affectation du résultat", "PV d'assemblée", "Concordance avec les statuts",
+                    "Contrôle du report à nouveau", "Vérification des dividendes distribués"]),
+            ]
+        case .autresBilan:
+            return [
+                grp(L, 0, "Comptes courants", ["455 Associés", "457 Dividendes"]),
+                grp(L, 1, "Comptes d'attente", ["471", "472"]),
+                grp(L, 2, "Divers", ["467", "Débiteurs et créditeurs divers"]),
+                grp(L, 3, "Contrôles", ["Justification ligne à ligne", "Analyse de l'ancienneté", "Vérification des soldes anormaux"]),
+            ]
+        case .groupe:
+            return [
+                grp(L, 0, "Contrôles", ["Comptes courants d'associés", "Opérations intra-groupe", "Conventions réglementées",
+                    "Prêts entre sociétés", "Refacturations"]),
+            ]
+        case .nonClasse:
+            return []
+        }
+    }
+}

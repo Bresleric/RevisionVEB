@@ -190,6 +190,8 @@ struct CycleBalanceView: View {
     let exerciceID: UUID
     let dossierID: UUID
 
+    @State private var tab = 0   // 0 = Comptes, 1 = Contrôles
+
     @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
     @Query private var rules: [AccountCycleRule]
 
@@ -232,12 +234,21 @@ struct CycleBalanceView: View {
                     statChip(label: "Var. N/N-1", value: formatEuroSigned(totalVariation),
                              color: totalVariation > 0 ? .green : (totalVariation < 0 ? .red : .secondary))
                 }
+                Picker("", selection: $tab) {
+                    Text("Comptes (\(accounts.count))").tag(0)
+                    Text("Contrôles").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 260)
+                .padding(.top, 4)
             }
             .padding()
 
             Divider()
 
-            if accounts.isEmpty {
+            if tab == 1 {
+                CycleControlsView(cycle: cycle, exerciceID: exerciceID)
+            } else if accounts.isEmpty {
                 if exerciceAccounts.isEmpty {
                     PlaceholderView(title: "Aucune balance importée",
                                     message: "Va dans Import et charge ta balance (CSV/TXT) — les comptes de ce cycle s'afficheront ici.")
@@ -291,6 +302,153 @@ struct CycleBalanceView: View {
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(Color.gray.opacity(0.1))
         .cornerRadius(8)
+    }
+}
+
+// MARK: - Controles de revision (feuille de travail par cycle)
+
+struct CycleControlsView: View {
+    let cycle: RevisionCycle
+    let exerciceID: UUID
+
+    @Environment(\.modelContext) private var modelContext
+    @Query private var states: [ControlState]
+
+    private let syntheseID = "__synthese__"
+
+    private var statesDict: [String: ControlState] {
+        Dictionary(
+            states.filter { $0.exerciceID == exerciceID && $0.cycleRaw == cycle.rawValue }
+                  .map { ($0.itemID, $0) },
+            uniquingKeysWith: { _, last in last }
+        )
+    }
+
+    private var groups: [ControlGroup] { RevisionControls.groups(for: cycle) }
+
+    private var allItems: [ControlItem] { groups.flatMap { $0.items } }
+    private var doneCount: Int {
+        allItems.filter { (statesDict[$0.id]?.statut ?? .aFaire) != .aFaire }.count
+    }
+    private var anomalies: Int {
+        allItems.filter { statesDict[$0.id]?.statut == .anomalie }.count
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Avancement
+                HStack(spacing: 16) {
+                    Label("\(doneCount)/\(allItems.count) traités", systemImage: "checklist")
+                    if anomalies > 0 {
+                        Label("\(anomalies) anomalie\(anomalies > 1 ? "s" : "")", systemImage: "xmark.octagon.fill")
+                            .foregroundStyle(.red)
+                    }
+                    Spacer()
+                }
+                .font(.subheadline)
+
+                ForEach(groups) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(group.titre).font(.headline)
+                        ForEach(group.items) { item in
+                            ControlRowView(
+                                item: item,
+                                state: statesDict[item.id],
+                                onStatut: { setStatut(item.id, $0) },
+                                onNote: { setNote(item.id, $0) }
+                            )
+                        }
+                    }
+                    .padding(12)
+                    .background(Color.gray.opacity(0.06))
+                    .cornerRadius(10)
+                }
+
+                // Note de synthese du cycle
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Note de synthèse du cycle").font(.headline)
+                    SyntheseEditor(
+                        text: statesDict[syntheseID]?.note ?? "",
+                        onChange: { setNote(syntheseID, $0) }
+                    )
+                }
+            }
+            .padding()
+        }
+    }
+
+    private func state(for itemID: String) -> ControlState {
+        if let s = statesDict[itemID] { return s }
+        let s = ControlState(exerciceID: exerciceID, cycleRaw: cycle.rawValue, itemID: itemID)
+        modelContext.insert(s)
+        return s
+    }
+
+    private func setStatut(_ itemID: String, _ statut: ControlStatus) {
+        let s = state(for: itemID)
+        s.statut = statut
+        s.updatedAt = Date()
+        try? modelContext.save()
+    }
+
+    private func setNote(_ itemID: String, _ note: String) {
+        let s = state(for: itemID)
+        s.note = note
+        s.updatedAt = Date()
+        try? modelContext.save()
+    }
+}
+
+private struct ControlRowView: View {
+    let item: ControlItem
+    let state: ControlState?
+    let onStatut: (ControlStatus) -> Void
+    let onNote: (String) -> Void
+
+    @State private var note: String = ""
+
+    private var statut: ControlStatus { state?.statut ?? .aFaire }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Menu {
+                ForEach(ControlStatus.allCases, id: \.self) { s in
+                    Button { onStatut(s) } label: { Label(s.rawValue, systemImage: s.icon) }
+                }
+            } label: {
+                Image(systemName: statut.icon).foregroundStyle(statut.color)
+                    .font(.title3)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.libelle)
+                TextField("Observation…", text: $note, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.callout)
+                    .onChange(of: note) { _, nv in onNote(nv) }
+            }
+        }
+        .padding(.vertical, 2)
+        .onAppear { if note.isEmpty { note = state?.note ?? "" } }
+    }
+}
+
+/// Editeur multiligne pour la note de synthese (persistance a la frappe).
+private struct SyntheseEditor: View {
+    let text: String
+    let onChange: (String) -> Void
+    @State private var local: String = ""
+
+    var body: some View {
+        TextEditor(text: $local)
+            .frame(minHeight: 120)
+            .padding(6)
+            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3)))
+            .onChange(of: local) { _, nv in onChange(nv) }
+            .onAppear { if local.isEmpty { local = text } }
     }
 }
 
