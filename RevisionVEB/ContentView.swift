@@ -7,6 +7,8 @@
 
 import SwiftUI
 import SwiftData
+import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - Racine : choix du dossier (societe) + exercice
 
@@ -192,11 +194,21 @@ struct CycleBalanceView: View {
 
     @State private var tab = 0   // 0 = Comptes, 1 = Contrôles
 
+    @Environment(\.modelContext) private var modelContext
     @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
     @Query private var rules: [AccountCycleRule]
+    @Query private var justifications: [AccountJustification]
+
+    @State private var pendingAccount: String?
+    @State private var showDocImporter = false
 
     private var rulesDict: [String: RevisionCycle] {
         Dictionary(rules.filter { $0.dossierID == dossierID }.map { ($0.accountNumber, $0.cycle) },
+                   uniquingKeysWith: { _, last in last })
+    }
+
+    private var justifDict: [String: AccountJustification] {
+        Dictionary(justifications.filter { $0.exerciceID == exerciceID }.map { ($0.accountNumber, $0) },
                    uniquingKeysWith: { _, last in last })
     }
 
@@ -288,10 +300,80 @@ struct CycleBalanceView: View {
                             .foregroundStyle(v > 0 ? .green : (v < 0 ? .red : .secondary))
                     }
                     .width(110)
+                    TableColumn("Solde justifié") { acc in
+                        JustifSoldeCell(value: justifDict[acc.accountNumber]?.soldeJustifie,
+                                        onCommit: { setSolde(acc.accountNumber, $0) })
+                    }
+                    .width(120)
+                    TableColumn("Écart") { acc in
+                        if let s = justifDict[acc.accountNumber]?.soldeJustifie {
+                            let ecart = acc.balanceN - s
+                            Text(formatEuroSigned(ecart)).monospacedDigit()
+                                .foregroundStyle(abs(ecart) < 0.5 ? .green : .red)
+                        } else {
+                            Text("—").foregroundStyle(.tertiary)
+                        }
+                    }
+                    .width(105)
+                    TableColumn("Réf.") { acc in
+                        RefCell(justif: justifDict[acc.accountNumber],
+                                onOpen: { openDoc(acc.accountNumber) },
+                                onLink: { pendingAccount = acc.accountNumber; showDocImporter = true },
+                                onRemove: { removeDoc(acc.accountNumber) })
+                    }
+                    .width(150)
+                }
+                .fileImporter(isPresented: $showDocImporter,
+                              allowedContentTypes: [.item],
+                              allowsMultipleSelection: false) { result in
+                    if case .success(let urls) = result, let url = urls.first, let acc = pendingAccount {
+                        attachDoc(acc, url)
+                    }
+                    pendingAccount = nil
                 }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    // MARK: Justification (cross-ref)
+
+    private func justif(for accountNumber: String) -> AccountJustification {
+        if let j = justifDict[accountNumber] { return j }
+        let j = AccountJustification(exerciceID: exerciceID, accountNumber: accountNumber)
+        modelContext.insert(j)
+        return j
+    }
+
+    private func setSolde(_ accountNumber: String, _ value: Double?) {
+        let j = justif(for: accountNumber)
+        j.soldeJustifie = value
+        j.updatedAt = Date()
+        try? modelContext.save()
+    }
+
+    private func attachDoc(_ accountNumber: String, _ url: URL) {
+        let j = justif(for: accountNumber)
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        j.docPath = url.path
+        j.docName = url.lastPathComponent
+        j.docBookmark = (try? url.bookmarkData(options: [.withSecurityScope],
+                                               includingResourceValuesForKeys: nil, relativeTo: nil))
+            ?? (try? url.bookmarkData())
+        j.updatedAt = Date()
+        try? modelContext.save()
+    }
+
+    private func removeDoc(_ accountNumber: String) {
+        guard let j = justifDict[accountNumber] else { return }
+        j.docPath = ""; j.docName = ""; j.docBookmark = nil; j.updatedAt = Date()
+        try? modelContext.save()
+    }
+
+    private func openDoc(_ accountNumber: String) {
+        guard let j = justifDict[accountNumber] else { return }
+        openJustificationDocument(path: j.docPath, bookmark: j.docBookmark)
     }
 
     private func statChip(label: String, value: String, color: Color = .primary) -> some View {
@@ -302,6 +384,91 @@ struct CycleBalanceView: View {
         .padding(.horizontal, 12).padding(.vertical, 6)
         .background(Color.gray.opacity(0.1))
         .cornerRadius(8)
+    }
+}
+
+// MARK: - Cellules cross-ref (solde justifie + reference document)
+
+private struct JustifSoldeCell: View {
+    let value: Double?
+    let onCommit: (Double?) -> Void
+    @State private var text: String = ""
+
+    var body: some View {
+        TextField("—", text: $text)
+            .textFieldStyle(.roundedBorder)
+            .multilineTextAlignment(.trailing)
+            .monospacedDigit()
+            .onSubmit(commit)
+            .onAppear { text = Self.format(value) }
+    }
+
+    private func commit() {
+        let cleaned = text
+            .replacingOccurrences(of: "\u{00A0}", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: "€", with: "")
+            .replacingOccurrences(of: ",", with: ".")
+            .trimmingCharacters(in: .whitespaces)
+        if cleaned.isEmpty { onCommit(nil) }
+        else if let d = Double(cleaned) { onCommit(d) }
+    }
+
+    private static func format(_ v: Double?) -> String {
+        guard let v else { return "" }
+        return String(format: "%.0f", v)
+    }
+}
+
+private struct RefCell: View {
+    let justif: AccountJustification?
+    let onOpen: () -> Void
+    let onLink: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        if let j = justif, j.hasDocument {
+            HStack(spacing: 4) {
+                Button(action: onOpen) {
+                    Label(j.docName.isEmpty ? "Ouvrir" : j.docName,
+                          systemImage: "doc.text.magnifyingglass")
+                        .lineLimit(1)
+                }
+                .buttonStyle(.borderless)
+                Menu {
+                    Button("Changer le document…", action: onLink)
+                    Button("Retirer le lien", role: .destructive, action: onRemove)
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+        } else {
+            Button(action: onLink) {
+                Label("Lier", systemImage: "paperclip")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Ouvre la piece justificative : via bookmark securise si possible, sinon par le chemin.
+func openJustificationDocument(path: String, bookmark: Data?) {
+    if let data = bookmark {
+        var stale = false
+        if let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope],
+                              relativeTo: nil, bookmarkDataIsStale: &stale) {
+            if url.startAccessingSecurityScopedResource() {
+                NSWorkspace.shared.open(url)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    url.stopAccessingSecurityScopedResource()
+                }
+                return
+            }
+        }
+    }
+    if !path.isEmpty {
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 }
 

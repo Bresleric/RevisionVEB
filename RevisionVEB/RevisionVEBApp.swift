@@ -20,6 +20,7 @@ struct RevisionVEBApp: App {
             Dossier.self,
             Exercice.self,
             ControlState.self,
+            AccountJustification.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 

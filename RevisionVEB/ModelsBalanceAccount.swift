@@ -278,6 +278,35 @@ enum ControlStatus: String, Codable, CaseIterable {
     }
 }
 
+/// Justification (cross-ref) d'un compte : solde justifie + piece liee.
+/// Cle logique = (exerciceID, accountNumber).
+@Model
+final class AccountJustification {
+    var exerciceID: UUID
+    var accountNumber: String
+    var soldeJustifie: Double?
+    var docName: String
+    var docPath: String
+    var docBookmark: Data?
+    var note: String
+    var updatedAt: Date
+
+    init(exerciceID: UUID, accountNumber: String,
+         soldeJustifie: Double? = nil, docName: String = "", docPath: String = "",
+         docBookmark: Data? = nil, note: String = "", updatedAt: Date = Date()) {
+        self.exerciceID = exerciceID
+        self.accountNumber = accountNumber
+        self.soldeJustifie = soldeJustifie
+        self.docName = docName
+        self.docPath = docPath
+        self.docBookmark = docBookmark
+        self.note = note
+        self.updatedAt = updatedAt
+    }
+
+    var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
+}
+
 /// Etat d'un point de controle (statut + observation), par exercice et par cycle.
 @Model
 final class ControlState {

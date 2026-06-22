@@ -33,7 +33,7 @@ struct ImportView: View {
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try! ModelContainer(
             for: Invoice.self, AuditResult.self, ImportLog.self, BalanceAccount.self, AccountCycleRule.self,
-            Dossier.self, Exercice.self, ControlState.self,
+            Dossier.self, Exercice.self, ControlState.self, AccountJustification.self,
             configurations: config
         )
         _importManager = StateObject(wrappedValue: ImportManager(modelContext: ModelContext(container)))
