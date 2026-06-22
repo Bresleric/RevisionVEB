@@ -329,7 +329,7 @@ private struct AccountRowView: View {
                 .font(.caption).foregroundStyle(.secondary)
                 .frame(width: 60, alignment: .leading)
             Picker("", selection: Binding(get: { current }, set: { onChange($0) })) {
-                ForEach(RevisionCycle.allCases) { c in
+                ForEach(RevisionCycle.allCases.filter { $0 != .nonClasse }) { c in
                     Text("\(c.letter) — \(c.shortName)").tag(c)
                 }
             }
