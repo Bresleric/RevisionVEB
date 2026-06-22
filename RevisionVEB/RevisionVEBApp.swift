@@ -17,6 +17,8 @@ struct RevisionVEBApp: App {
             ImportLog.self,
             BalanceAccount.self,
             AccountCycleRule.self,
+            Dossier.self,
+            Exercice.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -54,7 +56,7 @@ struct RevisionVEBApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
         .modelContainer(sharedModelContainer)
         .commands {

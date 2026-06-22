@@ -19,9 +19,10 @@ final class BalanceAccount {
     var balanceN: Double
     var balanceNMinus1: Double
     var restaurant: Restaurant
+    var exerciceID: UUID
     var sourceFile: String
     var importDate: Date
-    
+
     init(
         id: UUID = UUID(),
         accountNumber: String,
@@ -31,7 +32,8 @@ final class BalanceAccount {
         credit: Double,
         balanceN: Double,
         balanceNMinus1: Double,
-        restaurant: Restaurant,
+        restaurant: Restaurant = .freddy,
+        exerciceID: UUID,
         sourceFile: String,
         importDate: Date = Date()
     ) {
@@ -44,6 +46,7 @@ final class BalanceAccount {
         self.balanceN = balanceN
         self.balanceNMinus1 = balanceNMinus1
         self.restaurant = restaurant
+        self.exerciceID = exerciceID
         self.sourceFile = sourceFile
         self.importDate = importDate
     }
@@ -83,10 +86,12 @@ final class BalanceAccount {
 /// cycle automatique deduit du numero de compte.
 @Model
 final class AccountCycleRule {
-    @Attribute(.unique) var accountNumber: String
+    var dossierID: UUID
+    var accountNumber: String
     var cycleRaw: String
 
-    init(accountNumber: String, cycle: RevisionCycle) {
+    init(dossierID: UUID, accountNumber: String, cycle: RevisionCycle) {
+        self.dossierID = dossierID
         self.accountNumber = accountNumber
         self.cycleRaw = cycle.rawValue
     }
@@ -94,6 +99,40 @@ final class AccountCycleRule {
     var cycle: RevisionCycle {
         get { RevisionCycle(rawValue: cycleRaw) ?? .nonClasse }
         set { cycleRaw = newValue.rawValue }
+    }
+}
+
+// MARK: - Dossier (Societe) et Exercice
+
+/// Une societe / dossier de revision (ex: PLANB SARL, Moulin Neuf SARL).
+@Model
+final class Dossier {
+    @Attribute(.unique) var id: UUID
+    var nom: String
+    var ordre: Int
+
+    init(id: UUID = UUID(), nom: String, ordre: Int = 0) {
+        self.id = id
+        self.nom = nom
+        self.ordre = ordre
+    }
+}
+
+/// Un exercice comptable rattache a un dossier (ex: 2025, cloture au 31/12/2025).
+@Model
+final class Exercice {
+    @Attribute(.unique) var id: UUID
+    var dossierID: UUID
+    var libelle: String
+    var dateCloture: Date
+    var creeLe: Date
+
+    init(id: UUID = UUID(), dossierID: UUID, libelle: String, dateCloture: Date, creeLe: Date = Date()) {
+        self.id = id
+        self.dossierID = dossierID
+        self.libelle = libelle
+        self.dateCloture = dateCloture
+        self.creeLe = creeLe
     }
 }
 

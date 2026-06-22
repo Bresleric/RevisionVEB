@@ -10,23 +10,30 @@ import SwiftData
 import UniformTypeIdentifiers
 
 struct ImportView: View {
+    let exerciceID: UUID
+
     @Environment(\.modelContext) private var modelContext
     @StateObject private var importManager: ImportManager
-    @Query(sort: \ImportLog.timestamp, order: .reverse) private var importLogs: [ImportLog]
-    
-    @State private var selectedRestaurant: Restaurant = .freddy
+    @Query(sort: \ImportLog.timestamp, order: .reverse) private var importLogsRaw: [ImportLog]
+
     @State private var isDragOver = false
     @State private var showingFilePicker = false
-    @State private var selectedFileType: FileType = .invoicePDF
     @State private var showingExcelAlert = false
-    
-    init() {
+
+    /// Historique limite a l'exercice courant.
+    private var importLogs: [ImportLog] {
+        importLogsRaw.filter { $0.exerciceID == exerciceID }
+    }
+
+    init(exerciceID: UUID) {
+        self.exerciceID = exerciceID
         // Placeholder EN MEMOIRE uniquement : ne doit JAMAIS toucher le store disque
         // de l'app (sinon conflit de schema -> corruption). Le vrai modelContext de
         // l'environnement est injecte dans .onAppear.
         let config = ModelConfiguration(isStoredInMemoryOnly: true)
         let container = try! ModelContainer(
             for: Invoice.self, AuditResult.self, ImportLog.self, BalanceAccount.self, AccountCycleRule.self,
+            Dossier.self, Exercice.self,
             configurations: config
         )
         _importManager = StateObject(wrappedValue: ImportManager(modelContext: ModelContext(container)))
@@ -41,21 +48,12 @@ struct ImportView: View {
                         Text("Import de données")
                             .font(.largeTitle)
                             .fontWeight(.bold)
-                        
-                        Text("Glisse-dépose tes fichiers ou clique pour sélectionner")
+
+                        Text("La balance importée sera rattachée à l'exercice en cours.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
-                    
                     Spacer()
-                    
-                    Picker("Restaurant", selection: $selectedRestaurant) {
-                        ForEach(Restaurant.allCases, id: \.self) { restaurant in
-                            Text(restaurant.rawValue).tag(restaurant)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .frame(width: 200)
                 }
                 .padding()
                 
@@ -253,10 +251,10 @@ struct ImportView: View {
         
         if ext == "pdf" {
             print("📋 Import PDF...")
-            _ = await importManager.importInvoicePDF(url: url, restaurant: selectedRestaurant)
+            _ = await importManager.importInvoicePDF(url: url, restaurant: .freddy)
         } else if ext == "csv" || ext == "tsv" || ext == "txt" {
             print("📊 Import balance CSV/TSV/TXT...")
-            _ = await importManager.importBalance(url: url, restaurant: selectedRestaurant)
+            _ = await importManager.importBalance(url: url, exerciceID: exerciceID)
         } else if ext == "xlsx" || ext == "xls" {
             print("⚠️ Excel natif pas encore activé")
             await MainActor.run {
@@ -264,7 +262,7 @@ struct ImportView: View {
             }
         } else {
             print("📊 Import par défaut (balance CSV/TSV)...")
-            _ = await importManager.importBalance(url: url, restaurant: selectedRestaurant)
+            _ = await importManager.importBalance(url: url, exerciceID: exerciceID)
         }
         
         print("✅ Traitement terminé")
@@ -333,7 +331,7 @@ struct ImportLogRow: View {
 }
 
 #Preview {
-    ImportView()
+    ImportView(exerciceID: UUID())
         .modelContainer(for: Invoice.self, inMemory: true)
         .frame(width: 1200, height: 800)
 }

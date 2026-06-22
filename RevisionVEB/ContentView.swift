@@ -8,15 +8,55 @@
 import SwiftUI
 import SwiftData
 
-struct ContentView: View {
+// MARK: - Racine : choix du dossier (societe) + exercice
+
+struct RootView: View {
     @Environment(\.modelContext) private var modelContext
+    @AppStorage("currentExerciceID") private var currentExerciceID = ""
+
+    @Query(sort: \Dossier.ordre) private var dossiers: [Dossier]
+    @Query private var exercices: [Exercice]
+
+    private var current: (dossier: Dossier, exercice: Exercice)? {
+        guard let ex = exercices.first(where: { $0.id.uuidString == currentExerciceID }),
+              let d = dossiers.first(where: { $0.id == ex.dossierID }) else { return nil }
+        return (d, ex)
+    }
+
+    var body: some View {
+        Group {
+            if let cur = current {
+                ContentView(dossier: cur.dossier, exercice: cur.exercice,
+                            onSwitch: { currentExerciceID = "" })
+            } else {
+                DossierPickerView(onPick: { currentExerciceID = $0.id.uuidString })
+            }
+        }
+        .onAppear(perform: seedIfNeeded)
+    }
+
+    private func seedIfNeeded() {
+        guard dossiers.isEmpty else { return }
+        modelContext.insert(Dossier(nom: "PLANB SARL", ordre: 0))
+        modelContext.insert(Dossier(nom: "Moulin Neuf SARL", ordre: 1))
+        try? modelContext.save()
+    }
+}
+
+struct ContentView: View {
+    let dossier: Dossier
+    let exercice: Exercice
+    var onSwitch: () -> Void
+
     @State private var selectedSection: NavSection? = .dashboard
 
     var body: some View {
         NavigationSplitView {
-            SidebarView(selectedSection: $selectedSection)
+            SidebarView(selectedSection: $selectedSection,
+                        dossier: dossier, exercice: exercice, onSwitch: onSwitch)
         } detail: {
-            DetailContentView(section: selectedSection)
+            DetailContentView(section: selectedSection,
+                              exerciceID: exercice.id, dossierID: dossier.id)
         }
         .navigationSplitViewStyle(.balanced)
     }
@@ -66,11 +106,29 @@ enum NavSection: Hashable, Identifiable {
 
 struct SidebarView: View {
     @Binding var selectedSection: NavSection?
+    let dossier: Dossier
+    let exercice: Exercice
+    var onSwitch: () -> Void
 
     private let cycles = RevisionCycle.allCases.filter { $0 != .nonClasse }
 
     var body: some View {
         List(selection: $selectedSection) {
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(dossier.nom).font(.headline)
+                    Text("Exercice \(exercice.libelle)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button(action: onSwitch) {
+                        Label("Changer de dossier", systemImage: "arrow.left.arrow.right")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.top, 2)
+                }
+                .padding(.vertical, 4)
+            }
+
             Section("Vue d'ensemble") {
                 row(.dashboard)
                 row(.importData)
@@ -102,6 +160,8 @@ struct SidebarView: View {
 
 struct DetailContentView: View {
     let section: NavSection?
+    let exerciceID: UUID
+    let dossierID: UUID
 
     var body: some View {
         Group {
@@ -109,11 +169,11 @@ struct DetailContentView: View {
             case .dashboard:
                 DashboardView()
             case .importData:
-                ImportView()
+                ImportView(exerciceID: exerciceID)
             case .chartOfAccounts:
-                ChartOfAccountsView()
+                ChartOfAccountsView(exerciceID: exerciceID, dossierID: dossierID)
             case .cycle(let cycle):
-                CycleBalanceView(cycle: cycle)
+                CycleBalanceView(cycle: cycle, exerciceID: exerciceID, dossierID: dossierID)
             case .settings:
                 SettingsView()
             case .none:
@@ -127,17 +187,24 @@ struct DetailContentView: View {
 
 struct CycleBalanceView: View {
     let cycle: RevisionCycle
+    let exerciceID: UUID
+    let dossierID: UUID
 
     @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
     @Query private var rules: [AccountCycleRule]
 
     private var rulesDict: [String: RevisionCycle] {
-        Dictionary(uniqueKeysWithValues: rules.map { ($0.accountNumber, $0.cycle) })
+        Dictionary(rules.filter { $0.dossierID == dossierID }.map { ($0.accountNumber, $0.cycle) },
+                   uniquingKeysWith: { _, last in last })
+    }
+
+    private var exerciceAccounts: [BalanceAccount] {
+        allAccounts.filter { $0.exerciceID == exerciceID }
     }
 
     private var accounts: [BalanceAccount] {
         let dict = rulesDict
-        return allAccounts.filter { $0.effectiveCycle(rules: dict) == cycle }
+        return exerciceAccounts.filter { $0.effectiveCycle(rules: dict) == cycle }
     }
 
     private var totalDebit: Double { accounts.reduce(0) { $0 + $1.debit } }
@@ -171,7 +238,7 @@ struct CycleBalanceView: View {
             Divider()
 
             if accounts.isEmpty {
-                if allAccounts.isEmpty {
+                if exerciceAccounts.isEmpty {
                     PlaceholderView(title: "Aucune balance importée",
                                     message: "Va dans Import et charge ta balance (CSV/TXT) — les comptes de ce cycle s'afficheront ici.")
                 } else {
@@ -230,14 +297,22 @@ struct CycleBalanceView: View {
 // MARK: - Plan comptable (table des comptes + correction du cycle)
 
 struct ChartOfAccountsView: View {
+    let exerciceID: UUID
+    let dossierID: UUID
+
     @Environment(\.modelContext) private var modelContext
-    @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
+    @Query(sort: \BalanceAccount.accountNumber) private var allAccountsRaw: [BalanceAccount]
     @Query private var rules: [AccountCycleRule]
 
     @State private var search = ""
 
+    private var allAccounts: [BalanceAccount] {
+        allAccountsRaw.filter { $0.exerciceID == exerciceID }
+    }
+
     private var rulesDict: [String: RevisionCycle] {
-        Dictionary(uniqueKeysWithValues: rules.map { ($0.accountNumber, $0.cycle) })
+        Dictionary(rules.filter { $0.dossierID == dossierID }.map { ($0.accountNumber, $0.cycle) },
+                   uniquingKeysWith: { _, last in last })
     }
 
     private var filtered: [BalanceAccount] {
@@ -300,13 +375,13 @@ struct ChartOfAccountsView: View {
 
     private func setCycle(_ number: String, _ cycle: RevisionCycle) {
         let auto = RevisionCycle.forAccount(number)
-        let existing = rules.first { $0.accountNumber == number }
+        let existing = rules.first { $0.dossierID == dossierID && $0.accountNumber == number }
         if cycle == auto {
             if let r = existing { modelContext.delete(r) }   // retour au classement auto
         } else if let r = existing {
             r.cycle = cycle
         } else {
-            modelContext.insert(AccountCycleRule(accountNumber: number, cycle: cycle))
+            modelContext.insert(AccountCycleRule(dossierID: dossierID, accountNumber: number, cycle: cycle))
         }
         try? modelContext.save()
     }
@@ -382,7 +457,136 @@ struct PlaceholderView: View {
     }
 }
 
+// MARK: - Selection du dossier (societe) + exercice
+
+struct DossierPickerView: View {
+    var onPick: (Exercice) -> Void
+
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \Dossier.ordre) private var dossiers: [Dossier]
+    @Query(sort: \Exercice.libelle, order: .reverse) private var exercices: [Exercice]
+
+    @State private var newExerciceDossier: Dossier?
+    @State private var showNewDossier = false
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(dossiers) { dossier in
+                    Section(dossier.nom) {
+                        let exs = exercices.filter { $0.dossierID == dossier.id }
+                        if exs.isEmpty {
+                            Text("Aucun exercice — créez-en un")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        ForEach(exs) { ex in
+                            Button { onPick(ex) } label: {
+                                HStack {
+                                    Image(systemName: "folder.fill").foregroundStyle(.blue)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("Exercice \(ex.libelle)").fontWeight(.medium)
+                                        Text("Clôture \(ex.dateCloture.formatted(date: .abbreviated, time: .omitted))")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Button { newExerciceDossier = dossier } label: {
+                            Label("Nouvel exercice", systemImage: "plus.circle")
+                        }
+                        .font(.callout)
+                    }
+                }
+            }
+            .navigationTitle("Dossier de révision")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showNewDossier = true } label: {
+                        Label("Nouvelle société", systemImage: "building.2.crop.circle.badge.plus")
+                    }
+                }
+            }
+            .sheet(item: $newExerciceDossier) { dossier in
+                NewExerciceSheet(dossier: dossier)
+            }
+            .sheet(isPresented: $showNewDossier) {
+                NewDossierSheet(nextOrdre: dossiers.count)
+            }
+        }
+        .frame(minWidth: 540, minHeight: 460)
+    }
+}
+
+struct NewExerciceSheet: View {
+    let dossier: Dossier
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var libelle = ""
+    @State private var dateCloture = Date()
+
+    private var isValid: Bool { !libelle.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Nouvel exercice").font(.headline)
+            Text(dossier.nom).font(.subheadline).foregroundStyle(.secondary)
+            TextField("Libellé (ex : 2025)", text: $libelle).textFieldStyle(.roundedBorder)
+            DatePicker("Date de clôture", selection: $dateCloture, displayedComponents: .date)
+            HStack {
+                Spacer()
+                Button("Annuler") { dismiss() }
+                Button("Créer") {
+                    modelContext.insert(Exercice(dossierID: dossier.id,
+                                                 libelle: libelle.trimmingCharacters(in: .whitespaces),
+                                                 dateCloture: dateCloture))
+                    try? modelContext.save()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!isValid)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+    }
+}
+
+struct NewDossierSheet: View {
+    let nextOrdre: Int
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var nom = ""
+    private var isValid: Bool { !nom.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Nouvelle société").font(.headline)
+            TextField("Nom (ex : Moulin Neuf SARL)", text: $nom).textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Annuler") { dismiss() }
+                Button("Créer") {
+                    modelContext.insert(Dossier(nom: nom.trimmingCharacters(in: .whitespaces), ordre: nextOrdre))
+                    try? modelContext.save()
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!isValid)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+    }
+}
+
 #Preview {
-    ContentView()
-        .modelContainer(for: Invoice.self, inMemory: true)
+    RootView()
+        .modelContainer(for: [Dossier.self, Exercice.self, BalanceAccount.self,
+                              ImportLog.self, AccountCycleRule.self, Invoice.self, AuditResult.self],
+                        inMemory: true)
 }

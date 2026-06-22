@@ -20,7 +20,8 @@ final class ImportLog {
     var timestamp: Date
     var errorDetails: String
     var restaurant: Restaurant
-    
+    var exerciceID: UUID
+
     init(
         id: UUID = UUID(),
         fileName: String,
@@ -31,7 +32,8 @@ final class ImportLog {
         errorCount: Int = 0,
         timestamp: Date = Date(),
         errorDetails: String = "",
-        restaurant: Restaurant = .freddy
+        restaurant: Restaurant = .freddy,
+        exerciceID: UUID = UUID()
     ) {
         self.id = id
         self.fileName = fileName
@@ -43,6 +45,7 @@ final class ImportLog {
         self.timestamp = timestamp
         self.errorDetails = errorDetails
         self.restaurant = restaurant
+        self.exerciceID = exerciceID
     }
 }
 

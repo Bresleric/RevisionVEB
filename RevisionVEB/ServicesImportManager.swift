@@ -142,7 +142,7 @@ final class ImportManager: ObservableObject {
     
     // MARK: - Import Balance comptable (CSV / TXT)
 
-    func importBalance(url: URL, restaurant: Restaurant) async -> ImportLog {
+    func importBalance(url: URL, exerciceID: UUID) async -> ImportLog {
         print("📊 ImportManager.importBalance: \(url.lastPathComponent)")
 
         isImporting = true
@@ -151,7 +151,7 @@ final class ImportManager: ObservableObject {
         let log = ImportLog(
             fileName: url.lastPathComponent,
             fileType: .balanceExcel,
-            restaurant: restaurant
+            exerciceID: exerciceID
         )
 
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -179,7 +179,7 @@ final class ImportManager: ObservableObject {
             return log
         }
 
-        return await processBalance(content: content, fileName: url.lastPathComponent, restaurant: restaurant, log: log)
+        return await processBalance(content: content, fileName: url.lastPathComponent, exerciceID: exerciceID, log: log)
     }
     
     // MARK: - Lecture texte (detection auto de l'encodage)
@@ -253,7 +253,7 @@ final class ImportManager: ObservableObject {
 
     // MARK: - Traitement de la balance -> BalanceAccount
 
-    private func processBalance(content: String, fileName: String, restaurant: Restaurant, log: ImportLog) async -> ImportLog {
+    private func processBalance(content: String, fileName: String, exerciceID: UUID, log: ImportLog) async -> ImportLog {
         // Normalise les fins de ligne (\r seul, \r\n, \n)
         let normalized = content
             .replacingOccurrences(of: "\r\n", with: "\n")
@@ -281,9 +281,9 @@ final class ImportManager: ObservableObject {
             return log
         }
 
-        // Remplace la balance precedente du meme etablissement
+        // Remplace la balance precedente du meme exercice
         if let existing = try? modelContext.fetch(FetchDescriptor<BalanceAccount>()) {
-            for acc in existing where acc.restaurant == restaurant {
+            for acc in existing where acc.exerciceID == exerciceID {
                 modelContext.delete(acc)
             }
         }
@@ -311,7 +311,7 @@ final class ImportManager: ObservableObject {
                 credit: Self.parseFrenchAmount(value(row, cols.credit)) ?? 0,
                 balanceN: Self.parseFrenchAmount(value(row, cols.soldeN)) ?? 0,
                 balanceNMinus1: Self.parseFrenchAmount(value(row, cols.soldeN1)) ?? 0,
-                restaurant: restaurant,
+                exerciceID: exerciceID,
                 sourceFile: fileName
             )
             modelContext.insert(account)
