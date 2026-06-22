@@ -11,6 +11,9 @@ import SwiftData
 @main
 struct RevisionVEBApp: App {
     var sharedModelContainer: ModelContainer = {
+        // Instantané de sécurité de la base existante AVANT toute migration.
+        DataBackup.autoBackup()
+
         let schema = Schema([
             Invoice.self,
             AuditResult.self,

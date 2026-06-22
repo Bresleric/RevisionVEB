@@ -159,6 +159,12 @@ struct SidebarView: View {
                           systemImage: "square.and.arrow.up.on.square")
                 }
                 .disabled(isExporting)
+
+                Button {
+                    DispatchQueue.main.async { DataBackup.exportFullBackup() }
+                } label: {
+                    Label("Sauvegarder les données…", systemImage: "externaldrive.badge.timemachine")
+                }
             }
         }
         .navigationTitle("PLANB Audit")
@@ -168,6 +174,97 @@ struct SidebarView: View {
     private func row(_ section: NavSection) -> some View {
         NavigationLink(value: section) {
             Label(section.title, systemImage: section.icon)
+        }
+    }
+}
+
+// MARK: - Sauvegarde des donnees (filet de securite)
+
+enum DataBackup {
+    private static func appSupport() -> URL? {
+        try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                     appropriateFor: nil, create: true)
+    }
+    private static let storeName = "default.store"
+
+    private static func stamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        return f.string(from: Date())
+    }
+
+    /// Copie base + pieces vers un dossier destination.
+    private static func copyData(to dir: URL) {
+        let fm = FileManager.default
+        guard let appSup = appSupport() else { return }
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        for suffix in ["", "-wal", "-shm"] {
+            let src = appSup.appendingPathComponent(storeName + suffix)
+            if fm.fileExists(atPath: src.path) {
+                try? fm.copyItem(at: src, to: dir.appendingPathComponent(storeName + suffix))
+            }
+        }
+        let pieces = appSup.appendingPathComponent("Pieces")
+        if fm.fileExists(atPath: pieces.path) {
+            try? fm.copyItem(at: pieces, to: dir.appendingPathComponent("Pieces"))
+        }
+    }
+
+    /// Instantane automatique au lancement (avant toute migration). Garde les `keep` derniers.
+    /// Throttle : pas plus d'un instantane par 20 min.
+    static func autoBackup(keep: Int = 7) {
+        let fm = FileManager.default
+        guard let appSup = appSupport() else { return }
+        let store = appSup.appendingPathComponent(storeName)
+        guard fm.fileExists(atPath: store.path) else { return }   // 1er lancement : rien a sauvegarder
+
+        let backups = appSup.appendingPathComponent("Backups", isDirectory: true)
+        try? fm.createDirectory(at: backups, withIntermediateDirectories: true)
+
+        let dirs = (try? fm.contentsOfDirectory(at: backups, includingPropertiesForKeys: [.creationDateKey]))?
+            .filter { $0.lastPathComponent.hasPrefix("auto-") } ?? []
+        func created(_ u: URL) -> Date { (try? u.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast }
+
+        if let newest = dirs.map(created).max(), Date().timeIntervalSince(newest) < 20 * 60 {
+            return  // un instantane recent existe deja
+        }
+
+        copyData(to: backups.appendingPathComponent("auto-\(stamp())", isDirectory: true))
+
+        // Purge : garde les `keep` plus recents
+        let all = ((try? fm.contentsOfDirectory(at: backups, includingPropertiesForKeys: [.creationDateKey])) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix("auto-") }
+            .sorted { created($0) > created($1) }
+        for old in all.dropFirst(keep) { try? fm.removeItem(at: old) }
+    }
+
+    /// Sauvegarde complete vers un emplacement choisi (ZIP).
+    @MainActor
+    static func exportFullBackup() {
+        let fm = FileManager.default
+        let name = "RevisionVEB - Sauvegarde \(stamp())"
+        let root = fm.temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+        try? fm.removeItem(at: root)
+        copyData(to: root)
+
+        var zipURL: URL?
+        var err: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: root, options: [.forUploading], error: &err) { tmp in
+            let z = fm.temporaryDirectory.appendingPathComponent("\(name).zip")
+            try? fm.removeItem(at: z)
+            try? fm.copyItem(at: tmp, to: z)
+            zipURL = z
+        }
+        guard let zip = zipURL else { return }
+
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(name).zip"
+        panel.allowedContentTypes = [.zip]
+        panel.title = "Sauvegarder les données RevisionVEB"
+        if panel.runModal() == .OK, let dest = panel.url {
+            try? fm.removeItem(at: dest)
+            try? fm.copyItem(at: zip, to: dest)
+            NSWorkspace.shared.activateFileViewerSelecting([dest])
         }
     }
 }
