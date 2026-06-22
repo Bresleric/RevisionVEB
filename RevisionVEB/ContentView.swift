@@ -194,6 +194,10 @@ enum DossierExport {
             .filter { $0.dossierID == dossier.id }
         let states = ((try? context.fetch(FetchDescriptor<ControlState>())) ?? [])
             .filter { $0.exerciceID == exercice.id }
+        let recons = ((try? context.fetch(FetchDescriptor<BankReconciliation>())) ?? [])
+            .filter { $0.exerciceID == exercice.id }
+        let reconItems = ((try? context.fetch(FetchDescriptor<ReconItem>())) ?? [])
+            .filter { $0.exerciceID == exercice.id }
 
         let jDict = Dictionary(justifs.map { ($0.accountNumber, $0) }, uniquingKeysWith: { _, l in l })
         let rDict = Dictionary(rules.map { ($0.accountNumber, $0.cycle) }, uniquingKeysWith: { _, l in l })
@@ -243,6 +247,34 @@ enum DossierExport {
             let dest = pieces.appendingPathComponent("\(cyc) - \(src.lastPathComponent)")
             try? fm.removeItem(at: dest)
             try? fm.copyItem(at: src, to: dest)
+        }
+        // Pieces des elements de rapprochement
+        for it in reconItems where !it.docPath.isEmpty {
+            let src = URL(fileURLWithPath: it.docPath)
+            let dest = pieces.appendingPathComponent("B (rappro) - \(src.lastPathComponent)")
+            try? fm.removeItem(at: dest)
+            try? fm.copyItem(at: src, to: dest)
+        }
+
+        // Rapprochements.txt
+        if !recons.isEmpty {
+            var rap = "Rapprochements bancaires\n\(dossier.nom) — Exercice \(exercice.libelle)\n\n"
+            let accByNum = Dictionary(accounts.map { ($0.accountNumber, $0) }, uniquingKeysWith: { _, l in l })
+            for rec in recons.sorted(by: { $0.accountNumber < $1.accountNumber }) {
+                let a = accByNum[rec.accountNumber]
+                let comptable = a?.balanceN ?? 0
+                let items = reconItems.filter { $0.accountNumber == rec.accountNumber }.sorted { $0.ordre < $1.ordre }
+                let totalItems = items.reduce(0) { $0 + $1.montant }
+                let residuel = (rec.soldeExtrait ?? comptable) + totalItems - comptable
+                rap += "Compte \(rec.accountNumber) \(a?.accountLabel ?? "")\n"
+                rap += "  Solde comptable : \(num(comptable))\n"
+                rap += "  Solde extrait   : \(num(rec.soldeExtrait))\n"
+                for it in items {
+                    rap += "   - \(it.libelle) : \(num(it.montant))" + (it.docName.isEmpty ? "" : " [\(it.docName)]") + "\n"
+                }
+                rap += "  Écart résiduel  : \(num(residuel))" + (abs(residuel) < 0.5 ? " (rapproché)" : "") + "\n\n"
+            }
+            try? rap.data(using: .utf8)?.write(to: root.appendingPathComponent("Rapprochements.txt"))
         }
 
         // Zip (NSFileCoordinator .forUploading)
@@ -309,6 +341,8 @@ struct CycleBalanceView: View {
     @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
     @Query private var rules: [AccountCycleRule]
     @Query private var justifications: [AccountJustification]
+    @Query private var recons: [BankReconciliation]
+    @Query private var reconItems: [ReconItem]
 
     @State private var pendingAccount: String?
     @State private var showDocImporter = false
@@ -321,6 +355,29 @@ struct CycleBalanceView: View {
     private var justifDict: [String: AccountJustification] {
         Dictionary(justifications.filter { $0.exerciceID == exerciceID }.map { ($0.accountNumber, $0) },
                    uniquingKeysWith: { _, last in last })
+    }
+
+    private var reconDict: [String: BankReconciliation] {
+        Dictionary(recons.filter { $0.exerciceID == exerciceID }.map { ($0.accountNumber, $0) },
+                   uniquingKeysWith: { _, last in last })
+    }
+
+    private func reconItemsTotal(_ acct: String) -> Double {
+        reconItems.filter { $0.exerciceID == exerciceID && $0.accountNumber == acct }
+            .reduce(0) { $0 + $1.montant }
+    }
+
+    /// Vrai si un rapprochement bancaire avec solde extrait existe pour ce compte.
+    private func isReconciled(_ a: BalanceAccount) -> Bool {
+        reconDict[a.accountNumber]?.soldeExtrait != nil
+    }
+
+    /// Solde justifie effectif : issu du rapprochement bancaire si present, sinon la saisie manuelle.
+    private func justifiedValue(_ a: BalanceAccount) -> Double? {
+        if let rec = reconDict[a.accountNumber], let ext = rec.soldeExtrait {
+            return ext + reconItemsTotal(a.accountNumber)
+        }
+        return justifDict[a.accountNumber]?.soldeJustifie
     }
 
     private var exerciceAccounts: [BalanceAccount] {
@@ -416,13 +473,21 @@ struct CycleBalanceView: View {
                     }
                     .width(110)
                     TableColumn("Solde justifié") { acc in
-                        JustifSoldeCell(value: justifDict[acc.accountNumber]?.soldeJustifie,
-                                        onCommit: { setSolde(acc.accountNumber, $0) })
+                        if isReconciled(acc) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "building.columns").font(.caption2).foregroundStyle(.blue)
+                                Text(formatEuro(justifiedValue(acc) ?? 0)).monospacedDigit()
+                            }
+                            .help("Issu du rapprochement bancaire")
+                        } else {
+                            JustifSoldeCell(value: justifDict[acc.accountNumber]?.soldeJustifie,
+                                            onCommit: { setSolde(acc.accountNumber, $0) })
+                        }
                     }
-                    .width(120)
+                    .width(130)
                     TableColumn("Écart") { acc in
-                        if let s = justifDict[acc.accountNumber]?.soldeJustifie {
-                            let ecart = acc.balanceN - s
+                        if let jv = justifiedValue(acc) {
+                            let ecart = acc.balanceN - jv
                             Text(formatEuroSigned(ecart)).monospacedDigit()
                                 .foregroundStyle(abs(ecart) < 0.5 ? .green : .red)
                         } else {
@@ -534,17 +599,36 @@ private struct JustifSoldeCell: View {
 }
 
 private struct RefCell: View {
-    let justif: AccountJustification?
+    let hasDocument: Bool
+    let docName: String
     let onOpen: () -> Void
     let onLink: () -> Void
     let onRemove: () -> Void
 
+    init(hasDocument: Bool, docName: String,
+         onOpen: @escaping () -> Void, onLink: @escaping () -> Void, onRemove: @escaping () -> Void) {
+        self.hasDocument = hasDocument
+        self.docName = docName
+        self.onOpen = onOpen; self.onLink = onLink; self.onRemove = onRemove
+    }
+
+    init(justif: AccountJustification?,
+         onOpen: @escaping () -> Void, onLink: @escaping () -> Void, onRemove: @escaping () -> Void) {
+        self.init(hasDocument: justif?.hasDocument ?? false, docName: justif?.docName ?? "",
+                  onOpen: onOpen, onLink: onLink, onRemove: onRemove)
+    }
+
+    init(reconItem: ReconItem,
+         onOpen: @escaping () -> Void, onLink: @escaping () -> Void, onRemove: @escaping () -> Void) {
+        self.init(hasDocument: reconItem.hasDocument, docName: reconItem.docName,
+                  onOpen: onOpen, onLink: onLink, onRemove: onRemove)
+    }
+
     var body: some View {
-        if let j = justif, j.hasDocument {
+        if hasDocument {
             HStack(spacing: 4) {
                 Button(action: onOpen) {
-                    Label(j.docName.isEmpty ? "Ouvrir" : j.docName,
-                          systemImage: "doc.text.magnifyingglass")
+                    Label(docName.isEmpty ? "Ouvrir" : docName, systemImage: "doc.text.magnifyingglass")
                         .lineLimit(1)
                 }
                 .buttonStyle(.borderless)
@@ -799,6 +883,8 @@ private struct ReconciliationCard: View {
     @Query private var allItems: [ReconItem]
 
     @State private var soldeExtraitText = ""
+    @State private var pendingItem: ReconItem?
+    @State private var showItemImporter = false
 
     private var recon: BankReconciliation? {
         allRecons.first { $0.exerciceID == exerciceID && $0.accountNumber == account.accountNumber }
@@ -852,7 +938,10 @@ private struct ReconciliationCard: View {
             ForEach(items) { item in
                 ReconItemRow(item: item,
                              onCommit: { try? modelContext.save() },
-                             onDelete: { modelContext.delete(item); try? modelContext.save() })
+                             onDelete: { removeItemDoc(item); modelContext.delete(item); try? modelContext.save() },
+                             onLink: { pendingItem = item; showItemImporter = true },
+                             onOpen: { openJustificationDocument(path: item.docPath, bookmark: item.docBookmark) },
+                             onRemoveDoc: { removeItemDoc(item); try? modelContext.save() })
             }
             Button {
                 modelContext.insert(ReconItem(exerciceID: exerciceID, accountNumber: account.accountNumber,
@@ -881,6 +970,28 @@ private struct ReconciliationCard: View {
         .onAppear {
             soldeExtraitText = recon?.soldeExtrait.map { String(format: "%.0f", $0) } ?? ""
         }
+        .fileImporter(isPresented: $showItemImporter,
+                      allowedContentTypes: [.item],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first, let item = pendingItem {
+                attachItemDoc(item, url)
+            }
+            pendingItem = nil
+        }
+    }
+
+    private func attachItemDoc(_ item: ReconItem, _ url: URL) {
+        let label = "\(account.accountNumber) rappro"
+        guard let copied = JustificatifStore.copyIn(source: url, exerciceID: exerciceID, accountNumber: label) else { return }
+        item.docPath = copied.path
+        item.docName = copied.name
+        item.docBookmark = nil
+        try? modelContext.save()
+    }
+
+    private func removeItemDoc(_ item: ReconItem) {
+        if !item.docPath.isEmpty { try? FileManager.default.removeItem(atPath: item.docPath) }
+        item.docPath = ""; item.docName = ""; item.docBookmark = nil
     }
 
     private func labeled(_ label: String, _ value: String) -> some View {
@@ -912,6 +1023,9 @@ private struct ReconItemRow: View {
     @Bindable var item: ReconItem
     var onCommit: () -> Void
     var onDelete: () -> Void
+    var onLink: () -> Void
+    var onOpen: () -> Void
+    var onRemoveDoc: () -> Void
     @State private var montantText = ""
 
     var body: some View {
@@ -923,6 +1037,8 @@ private struct ReconItemRow: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 110).multilineTextAlignment(.trailing).monospacedDigit()
                 .onSubmit(commit)
+            RefCell(reconItem: item, onOpen: onOpen, onLink: onLink, onRemove: onRemoveDoc)
+                .frame(width: 150, alignment: .leading)
             Button(role: .destructive, action: onDelete) {
                 Image(systemName: "trash")
             }

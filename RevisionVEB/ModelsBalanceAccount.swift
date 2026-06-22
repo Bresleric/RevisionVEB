@@ -334,16 +334,25 @@ final class ReconItem {
     var libelle: String
     var montant: Double
     var ordre: Int
+    var docName: String
+    var docPath: String
+    var docBookmark: Data?
 
     init(id: UUID = UUID(), exerciceID: UUID, accountNumber: String,
-         libelle: String = "", montant: Double = 0, ordre: Int = 0) {
+         libelle: String = "", montant: Double = 0, ordre: Int = 0,
+         docName: String = "", docPath: String = "", docBookmark: Data? = nil) {
         self.id = id
         self.exerciceID = exerciceID
         self.accountNumber = accountNumber
         self.libelle = libelle
         self.montant = montant
         self.ordre = ordre
+        self.docName = docName
+        self.docPath = docPath
+        self.docBookmark = docBookmark
     }
+
+    var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
 }
 
 /// Etat d'un point de controle (statut + observation), par exercice et par cycle.
