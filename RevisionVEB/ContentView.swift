@@ -112,6 +112,9 @@ struct SidebarView: View {
     let exercice: Exercice
     var onSwitch: () -> Void
 
+    @Environment(\.modelContext) private var modelContext
+    @State private var isExporting = false
+
     private let cycles = RevisionCycle.allCases.filter { $0 != .nonClasse }
 
     var body: some View {
@@ -145,6 +148,17 @@ struct SidebarView: View {
 
             Section {
                 row(.settings)
+                Button {
+                    isExporting = true
+                    DispatchQueue.main.async {
+                        DossierExport.export(dossier: dossier, exercice: exercice, context: modelContext)
+                        isExporting = false
+                    }
+                } label: {
+                    Label(isExporting ? "Export en cours…" : "Exporter pour l'expert-comptable",
+                          systemImage: "square.and.arrow.up.on.square")
+                }
+                .disabled(isExporting)
             }
         }
         .navigationTitle("PLANB Audit")
@@ -154,6 +168,103 @@ struct SidebarView: View {
     private func row(_ section: NavSection) -> some View {
         NavigationLink(value: section) {
             Label(section.title, systemImage: section.icon)
+        }
+    }
+}
+
+// MARK: - Export du dossier (ZIP pour l'expert-comptable)
+
+enum DossierExport {
+    @MainActor
+    static func export(dossier: Dossier, exercice: Exercice, context: ModelContext) {
+        let fm = FileManager.default
+        let safeName = "\(dossier.nom) - Exercice \(exercice.libelle)"
+            .replacingOccurrences(of: "/", with: "-")
+        let root = fm.temporaryDirectory.appendingPathComponent(safeName, isDirectory: true)
+        try? fm.removeItem(at: root)
+        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
+
+        // Donnees de l'exercice
+        let accounts = ((try? context.fetch(FetchDescriptor<BalanceAccount>())) ?? [])
+            .filter { $0.exerciceID == exercice.id }
+            .sorted { $0.accountNumber < $1.accountNumber }
+        let justifs = ((try? context.fetch(FetchDescriptor<AccountJustification>())) ?? [])
+            .filter { $0.exerciceID == exercice.id }
+        let rules = ((try? context.fetch(FetchDescriptor<AccountCycleRule>())) ?? [])
+            .filter { $0.dossierID == dossier.id }
+        let states = ((try? context.fetch(FetchDescriptor<ControlState>())) ?? [])
+            .filter { $0.exerciceID == exercice.id }
+
+        let jDict = Dictionary(justifs.map { ($0.accountNumber, $0) }, uniquingKeysWith: { _, l in l })
+        let rDict = Dictionary(rules.map { ($0.accountNumber, $0.cycle) }, uniquingKeysWith: { _, l in l })
+
+        func num(_ d: Double?) -> String { d.map { String(format: "%.0f", $0) } ?? "" }
+
+        // Recap.csv
+        var csv = "Cycle;Compte;Intitulé;Solde N;Solde justifié;Écart;Document\n"
+        for a in accounts {
+            let cyc = a.effectiveCycle(rules: rDict)
+            let sj = jDict[a.accountNumber]?.soldeJustifie
+            let ecart = sj.map { a.balanceN - $0 }
+            let label = (a.accountLabel.isEmpty ? a.accountCode : a.accountLabel)
+                .replacingOccurrences(of: ";", with: ",")
+            let doc = jDict[a.accountNumber]?.docName ?? ""
+            csv += "\(cyc.letter);\(a.accountNumber);\(label);\(num(a.balanceN));\(num(sj));\(num(ecart));\(doc)\n"
+        }
+        try? csv.data(using: .utf8)?.write(to: root.appendingPathComponent("Recap.csv"))
+
+        // Controles.txt
+        var ctrl = "Contrôles de révision\n\(dossier.nom) — Exercice \(exercice.libelle)\n\n"
+        for cycle in RevisionCycle.allCases where cycle != .nonClasse {
+            let cstates = Dictionary(states.filter { $0.cycleRaw == cycle.rawValue }.map { ($0.itemID, $0) },
+                                     uniquingKeysWith: { _, l in l })
+            ctrl += "=== Cycle \(cycle.rawValue) ===\n"
+            for g in RevisionControls.groups(for: cycle) {
+                ctrl += "  [\(g.titre)]\n"
+                for it in g.items {
+                    let st = cstates[it.id]?.statut ?? .aFaire
+                    let note = cstates[it.id]?.note ?? ""
+                    ctrl += "   - \(it.libelle) : \(st.rawValue)" + (note.isEmpty ? "" : " — \(note)") + "\n"
+                }
+            }
+            if let syn = cstates["__synthese__"]?.note, !syn.isEmpty {
+                ctrl += "  Synthèse: \(syn)\n"
+            }
+            ctrl += "\n"
+        }
+        try? ctrl.data(using: .utf8)?.write(to: root.appendingPathComponent("Controles.txt"))
+
+        // Justificatifs (classes par cycle)
+        let pieces = root.appendingPathComponent("Justificatifs", isDirectory: true)
+        try? fm.createDirectory(at: pieces, withIntermediateDirectories: true)
+        for j in justifs where !j.docPath.isEmpty {
+            let src = URL(fileURLWithPath: j.docPath)
+            let cyc = (rDict[j.accountNumber] ?? RevisionCycle.forAccount(j.accountNumber)).letter
+            let dest = pieces.appendingPathComponent("\(cyc) - \(src.lastPathComponent)")
+            try? fm.removeItem(at: dest)
+            try? fm.copyItem(at: src, to: dest)
+        }
+
+        // Zip (NSFileCoordinator .forUploading)
+        var zipURL: URL?
+        var coordErr: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: root, options: [.forUploading], error: &coordErr) { tmp in
+            let z = fm.temporaryDirectory.appendingPathComponent("\(safeName).zip")
+            try? fm.removeItem(at: z)
+            try? fm.copyItem(at: tmp, to: z)
+            zipURL = z
+        }
+        guard let zip = zipURL else { return }
+
+        // Enregistrement choisi par l'utilisateur
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(safeName).zip"
+        panel.allowedContentTypes = [.zip]
+        panel.title = "Exporter le dossier de révision"
+        if panel.runModal() == .OK, let dest = panel.url {
+            try? fm.removeItem(at: dest)
+            try? fm.copyItem(at: zip, to: dest)
+            NSWorkspace.shared.activateFileViewerSelecting([dest])
         }
     }
 }
@@ -353,20 +464,18 @@ struct CycleBalanceView: View {
     }
 
     private func attachDoc(_ accountNumber: String, _ url: URL) {
+        guard let copied = JustificatifStore.copyIn(source: url, exerciceID: exerciceID, accountNumber: accountNumber) else { return }
         let j = justif(for: accountNumber)
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        j.docPath = url.path
-        j.docName = url.lastPathComponent
-        j.docBookmark = (try? url.bookmarkData(options: [.withSecurityScope],
-                                               includingResourceValuesForKeys: nil, relativeTo: nil))
-            ?? (try? url.bookmarkData())
+        j.docPath = copied.path
+        j.docName = copied.name
+        j.docBookmark = nil
         j.updatedAt = Date()
         try? modelContext.save()
     }
 
     private func removeDoc(_ accountNumber: String) {
         guard let j = justifDict[accountNumber] else { return }
+        if !j.docPath.isEmpty { try? FileManager.default.removeItem(atPath: j.docPath) }
         j.docPath = ""; j.docName = ""; j.docBookmark = nil; j.updatedAt = Date()
         try? modelContext.save()
     }
@@ -448,6 +557,41 @@ private struct RefCell: View {
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// Stockage local des pieces justificatives (dans le conteneur de l'app),
+/// organise par exercice. L'app en est proprietaire -> ouverture fiable + export.
+enum JustificatifStore {
+    static func baseDir() -> URL {
+        let fm = FileManager.default
+        let appSup = (try? fm.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                  appropriateFor: nil, create: true)) ?? fm.temporaryDirectory
+        let dir = appSup.appendingPathComponent("Pieces", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func dir(forExercice id: UUID) -> URL {
+        let d = baseDir().appendingPathComponent(id.uuidString, isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+
+    /// Copie la piece choisie dans le stockage de l'app. Retourne (chemin, nom d'origine).
+    static func copyIn(source: URL, exerciceID: UUID, accountNumber: String) -> (path: String, name: String)? {
+        let fm = FileManager.default
+        let scoped = source.startAccessingSecurityScopedResource()
+        defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+        let dest = dir(forExercice: exerciceID)
+            .appendingPathComponent("\(accountNumber) - \(source.lastPathComponent)")
+        try? fm.removeItem(at: dest)
+        do {
+            try fm.copyItem(at: source, to: dest)
+            return (dest.path, source.lastPathComponent)
+        } catch {
+            return nil
         }
     }
 }
