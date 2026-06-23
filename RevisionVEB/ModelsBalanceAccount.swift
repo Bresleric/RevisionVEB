@@ -307,6 +307,67 @@ final class AccountJustification {
     var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
 }
 
+/// Mapping compte de vente (classe 70) -> taux de TVA, par exercice.
+@Model
+final class TvaCompteTaux {
+    var exerciceID: UUID = UUID()
+    var compte: String = ""
+    var taux: String = ""   // "20", "10", "5.5", "2.1", "Exo"
+
+    init(exerciceID: UUID, compte: String, taux: String = "") {
+        self.exerciceID = exerciceID
+        self.compte = compte
+        self.taux = taux
+    }
+}
+
+/// Une ligne de declaration CA3 : periode + taux + base + TVA collectee.
+@Model
+final class Ca3Entry {
+    var id: UUID = UUID()
+    var exerciceID: UUID = UUID()
+    var periode: String = ""   // ex: "2025-01"
+    var taux: String = ""
+    var base: Double = 0
+    var tva: Double = 0
+    var ordre: Int = 0
+
+    init(id: UUID = UUID(), exerciceID: UUID, periode: String = "", taux: String = "",
+         base: Double = 0, tva: Double = 0, ordre: Int = 0) {
+        self.id = id
+        self.exerciceID = exerciceID
+        self.periode = periode
+        self.taux = taux
+        self.base = base
+        self.tva = tva
+        self.ordre = ordre
+    }
+}
+
+/// Aides TVA : taux predefinis + detection du taux depuis un libelle de compte.
+enum TvaHelper {
+    static let presets = ["20", "10", "5.5", "2.1", "Exo", "—"]
+
+    /// Detecte le taux depuis un libelle ("...10%", "...VAE 5,5%", "EXO...").
+    static func detectTaux(from label: String) -> String {
+        let l = label.lowercased()
+        if l.contains("exo") { return "Exo" }
+        // cherche un nombre suivi de %
+        let pattern = "([0-9]+(?:[.,][0-9]+)?)\\s*%"
+        if let re = try? NSRegularExpression(pattern: pattern),
+           let m = re.firstMatch(in: label, range: NSRange(label.startIndex..., in: label)),
+           let r = Range(m.range(at: 1), in: label) {
+            return String(label[r]).replacingOccurrences(of: ",", with: ".")
+        }
+        return ""
+    }
+
+    /// Valeur numerique du taux (nil si exo / non defini).
+    static func rate(_ taux: String) -> Double? {
+        Double(taux.replacingOccurrences(of: ",", with: "."))
+    }
+}
+
 /// Rapprochement bancaire d'un compte (par exercice) : solde extrait + note.
 @Model
 final class BankReconciliation {

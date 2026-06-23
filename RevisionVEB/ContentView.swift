@@ -514,10 +514,11 @@ struct CycleBalanceView: View {
                 Picker("", selection: $tab) {
                     Text("Comptes (\(accounts.count))").tag(0)
                     if cycle == .tresorerie { Text("Rapprochements").tag(1) }
+                    if cycle == .fiscal { Text("TVA").tag(3) }
                     Text("Contrôles").tag(2)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: cycle == .tresorerie ? 380 : 280)
+                .frame(width: (cycle == .tresorerie || cycle == .fiscal) ? 380 : 280)
                 .padding(.top, 4)
             }
             .padding()
@@ -529,6 +530,8 @@ struct CycleBalanceView: View {
             } else if tab == 1 && cycle == .tresorerie {
                 CycleReconciliationView(exerciceID: exerciceID,
                                         bankAccounts: accounts.filter { $0.accountNumber.hasPrefix("51") })
+            } else if tab == 3 && cycle == .fiscal {
+                TvaControlView(exerciceID: exerciceID)
             } else if accounts.isEmpty {
                 if exerciceAccounts.isEmpty {
                     PlaceholderView(title: "Aucune balance importée",
@@ -1152,6 +1155,247 @@ private struct ReconItemRow: View {
             .trimmingCharacters(in: .whitespaces)
         item.montant = Double(c) ?? 0
         onCommit()
+    }
+}
+
+// MARK: - Contrôle TVA (Cycle I) : config taux + déclarations CA3 (I-1) + rapprochement (I-2)
+
+struct TvaControlView: View {
+    let exerciceID: UUID
+
+    @Environment(\.modelContext) private var modelContext
+    @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
+    @Query private var tauxConfig: [TvaCompteTaux]
+    @Query private var ca3: [Ca3Entry]
+
+    @State private var sub = 0   // 0 = Taux, 1 = Déclarations (I-1), 2 = Rapprochement (I-2)
+
+    private var ventes: [BalanceAccount] {
+        allAccounts.filter { $0.exerciceID == exerciceID && $0.accountNumber.hasPrefix("70") }
+    }
+    private var tauxDict: [String: String] {
+        Dictionary(tauxConfig.filter { $0.exerciceID == exerciceID }.map { ($0.compte, $0.taux) },
+                   uniquingKeysWith: { _, l in l })
+    }
+    private var entries: [Ca3Entry] {
+        ca3.filter { $0.exerciceID == exerciceID }
+            .sorted { ($0.periode, $0.taux) < ($1.periode, $1.taux) }
+    }
+
+    /// Taux effectif d'un compte : config manuelle si présente, sinon détecté du libellé.
+    private func taux(for acc: BalanceAccount) -> String {
+        if let t = tauxDict[acc.accountNumber], !t.isEmpty { return t }
+        return TvaHelper.detectTaux(from: acc.accountLabel)
+    }
+
+    private func tauxLabel(_ t: String) -> String {
+        if t.isEmpty || t == "—" { return "—" }
+        if t == "Exo" { return "Exonéré" }
+        return "\(t)%"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Picker("", selection: $sub) {
+                Text("Taux").tag(0)
+                Text("Déclarations").tag(1)
+                Text("Rapprochement").tag(2)
+            }
+            .pickerStyle(.segmented).frame(width: 420).padding()
+
+            Divider()
+
+            if ventes.isEmpty {
+                PlaceholderView(title: "Aucune vente importée",
+                                message: "Importe la balance : les comptes 70x serviront de base au rapprochement TVA.")
+            } else {
+                switch sub {
+                case 0: configView
+                case 1: declarationsView
+                default: rapprochementView
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    // MARK: Sous-vue Taux (config)
+
+    private var configView: some View {
+        List {
+            HStack {
+                Text("Compte").frame(width: 90, alignment: .leading)
+                Text("Intitulé").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Base HT (compta)").frame(width: 130, alignment: .trailing)
+                Text("Taux TVA").frame(width: 120, alignment: .leading)
+            }
+            .font(.caption).foregroundStyle(.secondary)
+
+            ForEach(ventes) { acc in
+                HStack {
+                    Text(acc.accountNumber).monospaced().frame(width: 90, alignment: .leading)
+                    Text(acc.accountLabel.isEmpty ? acc.accountCode : acc.accountLabel)
+                        .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(formatEuro(-acc.balanceN)).monospacedDigit().frame(width: 130, alignment: .trailing)
+                    Picker("", selection: Binding(get: { taux(for: acc) }, set: { setTaux(acc.accountNumber, $0) })) {
+                        ForEach(TvaHelper.presets, id: \.self) { Text(tauxLabel($0)).tag($0) }
+                    }
+                    .labelsHidden().frame(width: 120)
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    // MARK: Sous-vue Déclarations (I-1)
+
+    private var declTotals: [(taux: String, base: Double, tva: Double)] {
+        Dictionary(grouping: entries, by: { $0.taux }).map { (k, v) in
+            (k, v.reduce(0) { $0 + $1.base }, v.reduce(0) { $0 + $1.tva })
+        }.sorted { $0.taux < $1.taux }
+    }
+
+    private var declarationsView: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            List {
+                HStack {
+                    Text("Période").frame(width: 90, alignment: .leading)
+                    Text("Taux").frame(width: 90, alignment: .leading)
+                    Text("Base HT").frame(maxWidth: .infinity, alignment: .trailing)
+                    Text("TVA collectée").frame(width: 140, alignment: .trailing)
+                    Text("").frame(width: 30)
+                }
+                .font(.caption).foregroundStyle(.secondary)
+
+                ForEach(entries) { e in
+                    Ca3EntryRow(entry: e,
+                                onCommit: { try? modelContext.save() },
+                                onDelete: { modelContext.delete(e); try? modelContext.save() })
+                }
+
+                Button {
+                    modelContext.insert(Ca3Entry(exerciceID: exerciceID, ordre: entries.count))
+                    try? modelContext.save()
+                } label: { Label("Ajouter une ligne CA3", systemImage: "plus.circle") }
+                    .font(.callout)
+            }
+
+            Divider()
+            HStack(spacing: 24) {
+                Text("Totaux I-1 :").font(.subheadline).fontWeight(.medium)
+                ForEach(declTotals, id: \.taux) { t in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(tauxLabel(t.taux)).font(.caption).foregroundStyle(.secondary)
+                        Text("base \(formatEuro(t.base)) · TVA \(formatEuro(t.tva))").font(.callout).monospacedDigit()
+                    }
+                }
+                Spacer()
+            }
+            .padding()
+        }
+    }
+
+    // MARK: Sous-vue Rapprochement (I-2)
+
+    private var rapprochementView: some View {
+        let tauxSet = Set(ventes.map { taux(for: $0) }.filter { !$0.isEmpty && $0 != "—" })
+            .union(Set(entries.map { $0.taux }.filter { !$0.isEmpty && $0 != "—" }))
+        let rows = tauxSet.sorted()
+
+        return List {
+            HStack {
+                Text("Taux").frame(width: 80, alignment: .leading)
+                Text("Base comptable").frame(maxWidth: .infinity, alignment: .trailing)
+                Text("Base déclarée").frame(width: 130, alignment: .trailing)
+                Text("Écart").frame(width: 110, alignment: .trailing)
+                Text("Écart %").frame(width: 90, alignment: .trailing)
+                Text("Statut").frame(width: 90, alignment: .center)
+            }
+            .font(.caption).foregroundStyle(.secondary)
+
+            ForEach(rows, id: \.self) { t in
+                let bc = ventes.filter { taux(for: $0) == t }.reduce(0.0) { $0 + (-$1.balanceN) }
+                let bd = entries.filter { $0.taux == t }.reduce(0.0) { $0 + $1.base }
+                let ecart = bc - bd
+                let pct = bc != 0 ? (ecart / bc) * 100 : (bd == 0 ? 0 : 100)
+                let green = abs(pct) <= 0.05
+                HStack {
+                    Text(tauxLabel(t)).frame(width: 80, alignment: .leading)
+                    Text(formatEuro(bc)).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing)
+                    Text(formatEuro(bd)).monospacedDigit().frame(width: 130, alignment: .trailing)
+                    Text(formatEuroSigned(ecart)).monospacedDigit().frame(width: 110, alignment: .trailing)
+                        .foregroundStyle(green ? .green : .red)
+                    Text(String(format: "%.3f %%", pct)).monospacedDigit().frame(width: 90, alignment: .trailing)
+                        .foregroundStyle(green ? .green : .red)
+                    Label(green ? "OK" : "À voir", systemImage: green ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                        .labelStyle(.iconOnly).foregroundStyle(green ? .green : .red)
+                        .frame(width: 90, alignment: .center)
+                }
+                .padding(.vertical, 2)
+            }
+
+            if rows.isEmpty {
+                Text("Configure les taux et saisis au moins une déclaration pour voir le rapprochement.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: Actions
+
+    private func setTaux(_ compte: String, _ taux: String) {
+        let existing = tauxConfig.first { $0.exerciceID == exerciceID && $0.compte == compte }
+        if taux == "—" || taux.isEmpty {
+            if let e = existing { modelContext.delete(e) }   // revient à l'auto-détection
+        } else if let e = existing {
+            e.taux = taux
+        } else {
+            modelContext.insert(TvaCompteTaux(exerciceID: exerciceID, compte: compte, taux: taux))
+        }
+        try? modelContext.save()
+    }
+}
+
+private struct Ca3EntryRow: View {
+    @Bindable var entry: Ca3Entry
+    var onCommit: () -> Void
+    var onDelete: () -> Void
+    @State private var baseText = ""
+    @State private var tvaText = ""
+
+    var body: some View {
+        HStack {
+            TextField("2025-01", text: $entry.periode)
+                .textFieldStyle(.roundedBorder).frame(width: 90)
+                .onChange(of: entry.periode) { _, _ in onCommit() }
+            Picker("", selection: $entry.taux) {
+                ForEach(TvaHelper.presets, id: \.self) { Text($0 == "Exo" ? "Exo" : ($0 == "—" ? "—" : "\($0)%")).tag($0) }
+            }
+            .labelsHidden().frame(width: 90)
+            .onChange(of: entry.taux) { _, _ in onCommit() }
+            TextField("base HT", text: $baseText)
+                .textFieldStyle(.roundedBorder).frame(maxWidth: .infinity)
+                .multilineTextAlignment(.trailing).monospacedDigit()
+                .onSubmit { entry.base = parse(baseText); onCommit() }
+            TextField("TVA", text: $tvaText)
+                .textFieldStyle(.roundedBorder).frame(width: 140)
+                .multilineTextAlignment(.trailing).monospacedDigit()
+                .onSubmit { entry.tva = parse(tvaText); onCommit() }
+            Button(role: .destructive, action: onDelete) { Image(systemName: "trash") }
+                .buttonStyle(.borderless).frame(width: 30)
+        }
+        .padding(.vertical, 2)
+        .onAppear {
+            if baseText.isEmpty { baseText = entry.base == 0 ? "" : String(format: "%.0f", entry.base) }
+            if tvaText.isEmpty { tvaText = entry.tva == 0 ? "" : String(format: "%.0f", entry.tva) }
+        }
+    }
+
+    private func parse(_ s: String) -> Double {
+        Double(s.replacingOccurrences(of: "\u{00A0}", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: ",", with: ".")
+            .trimmingCharacters(in: .whitespaces)) ?? 0
     }
 }
 
