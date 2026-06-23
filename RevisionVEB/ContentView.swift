@@ -9,6 +9,7 @@ import SwiftUI
 import SwiftData
 import AppKit
 import UniformTypeIdentifiers
+import PDFKit
 
 // MARK: - Racine : choix du dossier (societe) + exercice
 
@@ -1158,6 +1159,97 @@ private struct ReconItemRow: View {
     }
 }
 
+// MARK: - Extraction CA3 (PDF 3310-CA3 -> lignes de déclaration)
+
+enum CA3Import {
+    struct Line { let taux: String; let base: Double; let taxe: Double }
+    struct Result { let periode: String; let lines: [Line] }
+
+    private static let frMonths: [String: Int] = [
+        "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
+        "juillet": 7, "aout": 8, "septembre": 9, "octobre": 10, "novembre": 11, "decembre": 12
+    ]
+
+    private static func matches(_ pattern: String, _ s: String, group: Int = 0) -> [String] {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
+        let ns = s as NSString
+        return re.matches(in: s, range: NSRange(location: 0, length: ns.length)).compactMap {
+            $0.range(at: group).location != NSNotFound ? ns.substring(with: $0.range(at: group)) : nil
+        }
+    }
+
+    private static func tauxStr(_ r: Double) -> String {
+        r == r.rounded() ? String(Int(r)) : String(r)
+    }
+
+    /// Parse un PDF 3310-CA3. Logique validée sur 11 déclarations PlanB 2025.
+    static func parse(_ url: URL) -> Result? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let doc = PDFDocument(url: url) else { return nil }
+        var raw = ""
+        for i in 0..<doc.pageCount { raw += (doc.page(at: i)?.string ?? "") + "\n" }
+
+        // Période
+        var periode = ""
+        if let r = raw.range(of: "période :") {
+            let after = String(raw[r.upperBound...]).prefix(40)
+                .replacingOccurrences(of: "\n", with: "").replacingOccurrences(of: "\r", with: "")
+            let folded = after.folding(options: .diacriticInsensitive, locale: Locale(identifier: "fr")).lowercased()
+            if let y = matches("(20[0-9]{2})", folded).first {
+                for (name, num) in frMonths where folded.contains(name) {
+                    periode = "\(y)-\(String(format: "%02d", num))"
+                }
+            }
+        }
+
+        // Zone utile
+        var body = raw.components(separatedBy: .newlines)
+            .filter { !$0.contains("impots.gouv.fr") && !$0.contains("://") && !$0.contains("Visualisation de la") }
+            .joined(separator: " ")
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+        if let r = body.range(of: "OPÉRATIONS TAXÉES") { body = String(body[r.lowerBound...]) }
+        for stop in ["MENTION EXPRESSE", "CADRE RÉSERVÉ"] {
+            if let r = body.range(of: stop) { body = String(body[..<r.lowerBound]) }
+        }
+
+        // Taux présents (ordre), AVANT de retirer les %
+        let rates = matches("Taux\\s+\\S+\\s+(\\d+(?:[.,]\\d+)?)\\s*%", body, group: 1)
+            .compactMap { Double($0.replacingOccurrences(of: ",", with: ".")) }
+
+        for pat in ["\\([^)]*\\)", "\\d{2}/\\d{2}/\\d{4}", "\\d{1,2}:\\d{2}", "\\d+(?:[.,]\\d+)? ?%"] {
+            body = body.replacingOccurrences(of: pat, with: " ", options: .regularExpression)
+        }
+
+        let nums = matches("\\d{1,3}(?: \\d{3})+|\\d+", body)
+            .compactMap { Double($0.replacingOccurrences(of: " ", with: "")) }
+            .filter { $0 >= 100 }
+
+        guard !nums.isEmpty, !rates.isEmpty, !periode.isEmpty else { return nil }
+        let a1 = nums[0]
+        func taxe(_ base: Double, _ rate: Double) -> Double { (base * rate / 100).rounded() }
+
+        var lines: [Line] = []
+        if rates.count == 1 {
+            lines = [Line(taux: tauxStr(rates[0]), base: a1, taxe: taxe(a1, rates[0]))]
+        } else if rates.count == 2 {
+            // base du 1er taux = 1er montant après A1 (fiable) ; le 2e se déduit de A1
+            let b0 = nums.count > 1 ? nums[1] : 0
+            let b1 = a1 - b0
+            lines = [
+                Line(taux: tauxStr(rates[0]), base: b0, taxe: taxe(b0, rates[0])),
+                Line(taux: tauxStr(rates[1]), base: b1, taxe: taxe(b1, rates[1]))
+            ]
+        } else {
+            for (i, r) in rates.enumerated() {
+                let bi = 1 + 2 * i
+                if bi < nums.count { lines.append(Line(taux: tauxStr(r), base: nums[bi], taxe: taxe(nums[bi], r))) }
+            }
+        }
+        return Result(periode: periode, lines: lines)
+    }
+}
+
 // MARK: - Contrôle TVA (Cycle I) : config taux + déclarations CA3 (I-1) + rapprochement (I-2)
 
 struct TvaControlView: View {
@@ -1169,6 +1261,8 @@ struct TvaControlView: View {
     @Query private var ca3: [Ca3Entry]
 
     @State private var sub = 0   // 0 = Taux, 1 = Déclarations (I-1), 2 = Rapprochement (I-2)
+    @State private var showCA3Importer = false
+    @State private var importMessage: String?
 
     private var ventes: [BalanceAccount] {
         allAccounts.filter { $0.exerciceID == exerciceID && $0.accountNumber.hasPrefix("70") }
@@ -1217,6 +1311,30 @@ struct TvaControlView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .fileImporter(isPresented: $showCA3Importer,
+                      allowedContentTypes: [.pdf],
+                      allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { importCA3(urls) }
+        }
+    }
+
+    private func importCA3(_ urls: [URL]) {
+        var imported = 0, failed = 0
+        for url in urls {
+            guard let res = CA3Import.parse(url) else { failed += 1; continue }
+            // Remplace les lignes existantes de cette période (évite les doublons)
+            for e in ca3 where e.exerciceID == exerciceID && e.periode == res.periode {
+                modelContext.delete(e)
+            }
+            for (i, line) in res.lines.enumerated() {
+                modelContext.insert(Ca3Entry(exerciceID: exerciceID, periode: res.periode,
+                                             taux: line.taux, base: line.base, tva: line.taxe, ordre: i))
+            }
+            imported += 1
+        }
+        try? modelContext.save()
+        importMessage = "\(imported) CA3 importé\(imported > 1 ? "s" : "")"
+            + (failed > 0 ? " · \(failed) échec\(failed > 1 ? "s" : "")" : "")
     }
 
     // MARK: Sous-vue Taux (config)
@@ -1273,11 +1391,19 @@ struct TvaControlView: View {
                                 onDelete: { modelContext.delete(e); try? modelContext.save() })
                 }
 
-                Button {
-                    modelContext.insert(Ca3Entry(exerciceID: exerciceID, ordre: entries.count))
-                    try? modelContext.save()
-                } label: { Label("Ajouter une ligne CA3", systemImage: "plus.circle") }
-                    .font(.callout)
+                HStack(spacing: 16) {
+                    Button {
+                        modelContext.insert(Ca3Entry(exerciceID: exerciceID, ordre: entries.count))
+                        try? modelContext.save()
+                    } label: { Label("Ajouter une ligne", systemImage: "plus.circle") }
+                    Button {
+                        showCA3Importer = true
+                    } label: { Label("Importer des CA3 (PDF)…", systemImage: "doc.text.viewfinder") }
+                    if let m = importMessage {
+                        Text(m).font(.caption).foregroundStyle(.green)
+                    }
+                }
+                .font(.callout)
             }
 
             Divider()
