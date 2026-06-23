@@ -344,6 +344,20 @@ final class Ca3Entry {
     }
 }
 
+/// Totaux d'une declaration CA3 par periode (TVA deductible ; collectee et net se deduisent).
+@Model
+final class Ca3Period {
+    var exerciceID: UUID = UUID()
+    var periode: String = ""
+    var tvaDeductible: Double = 0
+
+    init(exerciceID: UUID, periode: String, tvaDeductible: Double = 0) {
+        self.exerciceID = exerciceID
+        self.periode = periode
+        self.tvaDeductible = tvaDeductible
+    }
+}
+
 /// Aides TVA : taux predefinis + detection du taux depuis un libelle de compte.
 enum TvaHelper {
     static let presets = ["20", "10", "5.5", "2.1", "Exo", "—"]

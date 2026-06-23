@@ -34,7 +34,7 @@ struct ImportView: View {
         let container = try! ModelContainer(
             for: Invoice.self, AuditResult.self, ImportLog.self, BalanceAccount.self, AccountCycleRule.self,
             Dossier.self, Exercice.self, ControlState.self, AccountJustification.self,
-            BankReconciliation.self, ReconItem.self, TvaCompteTaux.self, Ca3Entry.self,
+            BankReconciliation.self, ReconItem.self, TvaCompteTaux.self, Ca3Entry.self, Ca3Period.self,
             configurations: config
         )
         _importManager = StateObject(wrappedValue: ImportManager(modelContext: ModelContext(container)))

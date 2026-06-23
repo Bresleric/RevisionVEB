@@ -1163,7 +1163,7 @@ private struct ReconItemRow: View {
 
 enum CA3Import {
     struct Line { let taux: String; let base: Double; let taxe: Double }
-    struct Result { let periode: String; let lines: [Line] }
+    struct Result { let periode: String; let lines: [Line]; let deductible: Double }
 
     private static let frMonths: [String: Int] = [
         "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
@@ -1203,9 +1203,13 @@ enum CA3Import {
             }
         }
 
-        // Zone utile
+        // Zone utile (on retire entêtes/pieds + lignes de hash d'URL)
+        func isHashLine(_ s: String) -> Bool {
+            s.range(of: "[0-9a-f]{12,}", options: .regularExpression) != nil
+        }
         var body = raw.components(separatedBy: .newlines)
-            .filter { !$0.contains("impots.gouv.fr") && !$0.contains("://") && !$0.contains("Visualisation de la") }
+            .filter { !$0.contains("impots.gouv.fr") && !$0.contains("://")
+                && !$0.contains("Visualisation de la") && !isHashLine($0) }
             .joined(separator: " ")
             .replacingOccurrences(of: "\u{00A0}", with: " ")
         if let r = body.range(of: "OPÉRATIONS TAXÉES") { body = String(body[r.lowerBound...]) }
@@ -1246,7 +1250,19 @@ enum CA3Import {
                 if bi < nums.count { lines.append(Line(taux: tauxStr(r), base: nums[bi], taxe: taxe(nums[bi], r))) }
             }
         }
-        return Result(periode: periode, lines: lines)
+
+        // TVA déductible : brute fiable -> on cherche d tel que |brute - d| réapparaisse plus loin (= net)
+        let brute = lines.reduce(0.0) { $0 + $1.taxe }
+        var deductible = 0.0
+        if let idxBrute = nums.firstIndex(where: { abs($0 - brute) < 1 }) {
+            for j in (idxBrute + 1)..<nums.count {
+                let d = nums[j]
+                if nums[(j + 1)...].contains(where: { abs($0 - abs(brute - d)) < 1 }) {
+                    deductible = d; break
+                }
+            }
+        }
+        return Result(periode: periode, lines: lines, deductible: deductible)
     }
 }
 
@@ -1259,6 +1275,7 @@ struct TvaControlView: View {
     @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
     @Query private var tauxConfig: [TvaCompteTaux]
     @Query private var ca3: [Ca3Entry]
+    @Query private var ca3Periods: [Ca3Period]
 
     @State private var sub = 0   // 0 = Taux, 1 = Déclarations (I-1), 2 = Rapprochement (I-2)
     @State private var showCA3Importer = false
@@ -1274,6 +1291,19 @@ struct TvaControlView: View {
     private var entries: [Ca3Entry] {
         ca3.filter { $0.exerciceID == exerciceID }
             .sorted { ($0.periode, $0.taux) < ($1.periode, $1.taux) }
+    }
+    private var deductDict: [String: Double] {
+        Dictionary(ca3Periods.filter { $0.exerciceID == exerciceID }.map { ($0.periode, $0.tvaDeductible) },
+                   uniquingKeysWith: { _, l in l })
+    }
+    /// Synthèse par période : collectée (Σ taxe), déductible (CA3), à payer (= collectée − déductible).
+    private var periodSummary: [(periode: String, collectee: Double, deductible: Double, net: Double)] {
+        let periodes = Set(entries.map { $0.periode }).union(deductDict.keys).filter { !$0.isEmpty }
+        return periodes.sorted().map { p in
+            let coll = entries.filter { $0.periode == p }.reduce(0.0) { $0 + $1.tva }
+            let ded = deductDict[p] ?? 0
+            return (p, coll, ded, coll - ded)
+        }
     }
 
     /// Taux effectif d'un compte : config manuelle si présente, sinon détecté du libellé.
@@ -1326,10 +1356,14 @@ struct TvaControlView: View {
             for e in ca3 where e.exerciceID == exerciceID && e.periode == res.periode {
                 modelContext.delete(e)
             }
+            for p in ca3Periods where p.exerciceID == exerciceID && p.periode == res.periode {
+                modelContext.delete(p)
+            }
             for (i, line) in res.lines.enumerated() {
                 modelContext.insert(Ca3Entry(exerciceID: exerciceID, periode: res.periode,
                                              taux: line.taux, base: line.base, tva: line.taxe, ordre: i))
             }
+            modelContext.insert(Ca3Period(exerciceID: exerciceID, periode: res.periode, tvaDeductible: res.deductible))
             imported += 1
         }
         try? modelContext.save()
@@ -1373,42 +1407,83 @@ struct TvaControlView: View {
         }.sorted { $0.taux < $1.taux }
     }
 
+    private func netLabel(_ net: Double) -> String {
+        net < -0.5 ? "\(formatEuro(-net)) (crédit)" : formatEuro(net)
+    }
+
     private var declarationsView: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let totalColl = periodSummary.reduce(0.0) { $0 + $1.collectee }
+        let totalDed  = periodSummary.reduce(0.0) { $0 + $1.deductible }
+        let totalNet  = totalColl - totalDed
+
+        return VStack(alignment: .leading, spacing: 0) {
             List {
-                HStack {
-                    Text("Période").frame(width: 90, alignment: .leading)
-                    Text("Taux").frame(width: 90, alignment: .leading)
-                    Text("Base HT").frame(maxWidth: .infinity, alignment: .trailing)
-                    Text("TVA collectée").frame(width: 140, alignment: .trailing)
-                    Text("").frame(width: 30)
-                }
-                .font(.caption).foregroundStyle(.secondary)
+                // I-1 : synthèse par déclaration (collectée / déductible / à payer)
+                Section("Synthèse par déclaration (I-1)") {
+                    HStack {
+                        Text("Période").frame(width: 90, alignment: .leading)
+                        Text("TVA collectée").frame(maxWidth: .infinity, alignment: .trailing)
+                        Text("TVA déductible").frame(width: 150, alignment: .trailing)
+                        Text("TVA à payer").frame(width: 150, alignment: .trailing)
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
 
-                ForEach(entries) { e in
-                    Ca3EntryRow(entry: e,
-                                onCommit: { try? modelContext.save() },
-                                onDelete: { modelContext.delete(e); try? modelContext.save() })
-                }
+                    ForEach(periodSummary, id: \.periode) { s in
+                        HStack {
+                            Text(s.periode).monospaced().frame(width: 90, alignment: .leading)
+                            Text(formatEuro(s.collectee)).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing)
+                            Text(formatEuro(s.deductible)).monospacedDigit().frame(width: 150, alignment: .trailing)
+                            Text(netLabel(s.net)).monospacedDigit().frame(width: 150, alignment: .trailing)
+                                .foregroundStyle(s.net < -0.5 ? .blue : .primary)
+                        }
+                    }
 
-                HStack(spacing: 16) {
-                    Button {
-                        modelContext.insert(Ca3Entry(exerciceID: exerciceID, ordre: entries.count))
-                        try? modelContext.save()
-                    } label: { Label("Ajouter une ligne", systemImage: "plus.circle") }
-                    Button {
-                        showCA3Importer = true
-                    } label: { Label("Importer des CA3 (PDF)…", systemImage: "doc.text.viewfinder") }
-                    if let m = importMessage {
-                        Text(m).font(.caption).foregroundStyle(.green)
+                    HStack {
+                        Text("Total (\(periodSummary.count) décl.)").fontWeight(.semibold)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(formatEuro(totalColl)).monospacedDigit().fontWeight(.semibold).frame(width: 150, alignment: .trailing)
+                        Text(formatEuro(totalDed)).monospacedDigit().fontWeight(.semibold).frame(width: 150, alignment: .trailing)
+                        Text(netLabel(totalNet)).monospacedDigit().fontWeight(.semibold).frame(width: 150, alignment: .trailing)
+                            .foregroundStyle(totalNet < -0.5 ? .blue : .primary)
                     }
                 }
-                .font(.callout)
+
+                // Détail par taux (base HT + TVA collectée)
+                Section("Détail par taux") {
+                    HStack {
+                        Text("Période").frame(width: 90, alignment: .leading)
+                        Text("Taux").frame(width: 90, alignment: .leading)
+                        Text("Base HT").frame(maxWidth: .infinity, alignment: .trailing)
+                        Text("TVA collectée").frame(width: 140, alignment: .trailing)
+                        Text("").frame(width: 30)
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+
+                    ForEach(entries) { e in
+                        Ca3EntryRow(entry: e,
+                                    onCommit: { try? modelContext.save() },
+                                    onDelete: { modelContext.delete(e); try? modelContext.save() })
+                    }
+
+                    HStack(spacing: 16) {
+                        Button {
+                            modelContext.insert(Ca3Entry(exerciceID: exerciceID, ordre: entries.count))
+                            try? modelContext.save()
+                        } label: { Label("Ajouter une ligne", systemImage: "plus.circle") }
+                        Button {
+                            showCA3Importer = true
+                        } label: { Label("Importer des CA3 (PDF)…", systemImage: "doc.text.viewfinder") }
+                        if let m = importMessage {
+                            Text(m).font(.caption).foregroundStyle(.green)
+                        }
+                    }
+                    .font(.callout)
+                }
             }
 
             Divider()
             HStack(spacing: 24) {
-                Text("Totaux I-1 :").font(.subheadline).fontWeight(.medium)
+                Text("Totaux par taux :").font(.subheadline).fontWeight(.medium)
                 ForEach(declTotals, id: \.taux) { t in
                     VStack(alignment: .leading, spacing: 2) {
                         Text(tauxLabel(t.taux)).font(.caption).foregroundStyle(.secondary)

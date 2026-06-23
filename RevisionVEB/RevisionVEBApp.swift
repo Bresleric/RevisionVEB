@@ -28,6 +28,7 @@ struct RevisionVEBApp: App {
             ReconItem.self,
             TvaCompteTaux.self,
             Ca3Entry.self,
+            Ca3Period.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
