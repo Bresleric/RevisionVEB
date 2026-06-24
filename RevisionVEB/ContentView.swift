@@ -1637,29 +1637,56 @@ struct TvaControlView: View {
     private var coherenceView: some View {
         let periodes = Set(entries.map { $0.periode }).union(caHTDict.keys)
             .filter { !$0.isEmpty }.sorted()
+        let sortedEntries = entries.sorted { ($0.periode, $0.taux) < ($1.periode, $1.taux) }
         func sumBase(_ p: String) -> Double { entries.filter { $0.periode == p }.reduce(0) { $0 + $1.base } }
-        func sumTaxe(_ p: String) -> Double { entries.filter { $0.periode == p }.reduce(0) { $0 + $1.tva } }
-        func recalcTaxe(_ p: String) -> Double {
-            entries.filter { $0.periode == p }.reduce(0.0) { $0 + (($1.base * (TvaHelper.rate($1.taux) ?? 0) / 100).rounded()) }
-        }
-        func coll(_ p: String) -> Double { sumTaxe(p) }
+        func coll(_ p: String) -> Double { entries.filter { $0.periode == p }.reduce(0) { $0 + $1.tva } }
         func net(_ p: String) -> Double { coll(p) - (deductDict[p] ?? 0) - (creditM1Dict[p] ?? 0) }
         let cw: CGFloat = 105
 
         return ScrollView([.horizontal, .vertical]) {
             VStack(alignment: .leading, spacing: 22) {
 
-                // Contrôle 1 : bases (Σ = A1) et taxes (= base × taux)
+                // Contrôle 1 : calcul des taxes PAR TAUX (TVA = base × taux)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Contrôle 1 — Calcul des taxes & bases")
+                    Text("Contrôle 1 — Calcul des taxes par taux (TVA = Base × Taux)")
+                        .font(.headline).padding(.bottom, 6)
+                    HStack(spacing: 0) {
+                        decCell("Période", w: 80, align: .leading, bold: true)
+                        decCell("Taux", w: 70, align: .leading, bold: true)
+                        decCell("Base HT", w: cw, bold: true)
+                        decCell("TVA déclarée", w: cw, bold: true)
+                        decCell("Base × Taux", w: cw, bold: true)
+                        decCell("Écart", w: 90, bold: true)
+                        statutCell(ok: true).hidden().overlay(Text("Statut").font(.callout.bold()))
+                    }
+                    .background(Color.gray.opacity(0.10))
+                    Divider()
+                    ForEach(sortedEntries) { e in
+                        let rate = TvaHelper.rate(e.taux) ?? 0
+                        let recalc = (e.base * rate / 100).rounded()
+                        let ecart = e.tva - recalc
+                        let ok = abs(ecart) < 1
+                        HStack(spacing: 0) {
+                            decCell(e.periode, w: 80, align: .leading)
+                            decCell(tauxLabel(e.taux), w: 70, align: .leading)
+                            decCell(formatEuro(e.base), w: cw)
+                            decCell(formatEuro(e.tva), w: cw)
+                            decCell(formatEuro(recalc), w: cw, color: .secondary)
+                            decCell(formatEuroSigned(ecart), w: 90, color: ok ? .green : .red)
+                            statutCell(ok: ok)
+                        }
+                        Divider()
+                    }
+                }
+
+                // Contrôle des bases : Σ bases déclarées = CA HT (ligne A1)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("Contrôle des bases — Σ bases = CA HT déclaré (ligne A1)")
                         .font(.headline).padding(.bottom, 6)
                     HStack(spacing: 0) {
                         decCell("Période", w: 80, align: .leading, bold: true)
                         decCell("Σ Bases", w: cw, bold: true)
                         decCell("CA HT (A1)", w: cw, bold: true)
-                        decCell("Écart", w: 90, bold: true)
-                        decCell("TVA = Σ base×taux", w: 140, bold: true)
-                        decCell("Collectée", w: cw, bold: true)
                         decCell("Écart", w: 90, bold: true)
                         statutCell(ok: true).hidden().overlay(Text("Statut").font(.callout.bold()))
                     }
@@ -1667,17 +1694,13 @@ struct TvaControlView: View {
                     Divider()
                     ForEach(periodes, id: \.self) { p in
                         let a1 = caHTDict[p] ?? 0
-                        let eBase = sumBase(p) - a1
-                        let eTaxe = recalcTaxe(p) - coll(p)
-                        let ok = abs(eBase) < 1 && abs(eTaxe) < 1
+                        let e = sumBase(p) - a1
+                        let ok = abs(e) < 1 && a1 > 0
                         HStack(spacing: 0) {
                             decCell(p, w: 80, align: .leading)
                             decCell(formatEuro(sumBase(p)), w: cw)
                             decCell(a1 == 0 ? "—" : formatEuro(a1), w: cw, color: .secondary)
-                            decCell(formatEuroSigned(eBase), w: 90, color: abs(eBase) < 1 ? .green : .red)
-                            decCell(formatEuro(recalcTaxe(p)), w: 140)
-                            decCell(formatEuro(coll(p)), w: cw, color: .secondary)
-                            decCell(formatEuroSigned(eTaxe), w: 90, color: abs(eTaxe) < 1 ? .green : .red)
+                            decCell(formatEuroSigned(e), w: 90, color: abs(e) < 1 ? .green : .red)
                             statutCell(ok: ok)
                         }
                         Divider()
@@ -1693,18 +1716,13 @@ struct TvaControlView: View {
                         decCell("Collectée", w: cw, bold: true)
                         decCell("− Déductible", w: cw, bold: true)
                         decCell("− Crédit M-1", w: cw, bold: true)
-                        decCell("= Net calculé", w: cw, bold: true)
-                        decCell("À payer / Crédit", w: 130, bold: true)
-                        decCell("Écart", w: 90, bold: true)
-                        statutCell(ok: true).hidden().overlay(Text("Statut").font(.callout.bold()))
+                        decCell("= Net", w: cw, bold: true)
+                        decCell("À payer / Crédit", w: 140, bold: true)
                     }
                     .background(Color.gray.opacity(0.10))
                     Divider()
                     ForEach(periodes, id: \.self) { p in
                         let n = net(p)
-                        let declared = n >= 0 ? n : -(-n)   // à payer (n>0) ou -crédit (n<0)
-                        let ecart = n - declared            // cohérence interne
-                        let ok = abs(ecart) < 1
                         HStack(spacing: 0) {
                             decCell(p, w: 80, align: .leading)
                             decCell(formatEuro(coll(p)), w: cw)
@@ -1712,9 +1730,7 @@ struct TvaControlView: View {
                             decCell(formatEuro(creditM1Dict[p] ?? 0), w: cw, color: .secondary)
                             decCell(formatEuroSigned(n), w: cw, bold: true)
                             decCell(n >= 0 ? "à payer \(formatEuro(n))" : "crédit \(formatEuro(-n))",
-                                    w: 130, color: n < 0 ? .blue : .primary)
-                            decCell(formatEuroSigned(ecart), w: 90, color: ok ? .green : .red)
-                            statutCell(ok: ok)
+                                    w: 140, color: n < 0 ? .blue : .primary)
                         }
                         Divider()
                     }
