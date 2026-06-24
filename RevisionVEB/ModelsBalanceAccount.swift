@@ -349,20 +349,26 @@ final class Ca3Entry {
 final class Ca3Period {
     var exerciceID: UUID = UUID()
     var periode: String = ""
-    var tvaDeductible: Double = 0   // déductible sur achats (hors report)
+    var tvaDeductible: Double = 0   // déductible sur achats (hors report) = ligne 19 + ligne 20
     var creditM1: Double = 0        // report du crédit de la déclaration précédente (ligne 22)
     var caHT: Double = 0            // CA HT total déclaré (ligne A1)
     var ligne16: Double = 0         // Total de la TVA brute due (ligne 16)
+    var ligne19: Double = 0         // TVA déductible sur immobilisations (ligne 19)
+    var ligne20: Double = 0         // TVA déductible sur autres biens et services (ligne 20)
 
     init(exerciceID: UUID, periode: String, tvaDeductible: Double = 0, creditM1: Double = 0,
-         caHT: Double = 0, ligne16: Double = 0) {
+         caHT: Double = 0, ligne16: Double = 0, ligne19: Double = 0, ligne20: Double = 0) {
         self.exerciceID = exerciceID
         self.periode = periode
         self.tvaDeductible = tvaDeductible
         self.creditM1 = creditM1
         self.caHT = caHT
         self.ligne16 = ligne16
+        self.ligne19 = ligne19
+        self.ligne20 = ligne20
     }
+
+    var ligne23: Double { ligne19 + ligne20 + creditM1 }   // total TVA déductible
 }
 
 /// Aides TVA : taux predefinis + detection du taux depuis un libelle de compte.
