@@ -1387,8 +1387,6 @@ enum ImmoExcelImport {
         try? data.write(to: tempFile)
         defer { try? FileManager.default.removeItem(at: tempFile) }
 
-        guard let archive = try? Foundation.FileManager.default.contentsOfDirectory(atPath: tempFile.path) else { return [] }
-
         do {
             // Parse ZIP → sharedStrings (texte) et worksheets (données)
             let strings = try parseSharedStrings(tempFile)
@@ -1472,17 +1470,23 @@ enum ImmoExcelImport {
                 let rowContent = String(xml[rowRange])
 
                 var cellValues: [String] = []
-                let cellPattern = "<c[^>]*(?:t=\"s\")?>\\s*<v>(\\d+|[^<]*)</v>"
-                if let cellRegex = try? NSRegularExpression(pattern: cellPattern) {
+                // Parse all <c>...</c> cells, extract their <v> value, and check t="s" for string lookup
+                let cellPattern = "<c[^>]*(?:t=\"s\")?[^>]*>.*?<v>([^<]+)</v>"
+                if let cellRegex = try? NSRegularExpression(pattern: cellPattern, options: [.dotMatchesLineSeparators]) {
                     let cellMatches = cellRegex.matches(in: rowContent, range: NSRange(rowContent.startIndex..., in: rowContent))
                     for cellMatch in cellMatches {
-                        if let valRange = Range(cellMatch.range(at: 1), in: rowContent) {
-                            let val = String(rowContent[valRange])
-                            if let idx = Int(val), idx < strings.count {
-                                cellValues.append(strings[idx])
-                            } else {
-                                cellValues.append(val)
-                            }
+                        guard let valRange = Range(cellMatch.range(at: 1), in: rowContent) else { continue }
+                        let val = String(rowContent[valRange])
+
+                        // Check if this cell has t="s" (string reference) by examining the cell tag
+                        let cellStartRange = NSRange(location: max(0, cellMatch.range.location - 30), length: min(30, cellMatch.range.location))
+                        let cellStart = (rowContent as NSString).substring(with: cellStartRange)
+                        let isString = cellStart.contains("t=\"s\"")
+
+                        if isString, let idx = Int(val), idx < strings.count {
+                            cellValues.append(strings[idx])
+                        } else {
+                            cellValues.append(val)
                         }
                     }
                 }
