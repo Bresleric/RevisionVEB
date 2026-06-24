@@ -353,6 +353,25 @@ enum DossierExport {
             try? fm.removeItem(at: dest)
             try? fm.copyItem(at: src, to: dest)
         }
+        // Factures d'investissement (cycle G)
+        let immoInv = ((try? context.fetch(FetchDescriptor<ImmoInvoice>())) ?? [])
+            .filter { $0.exerciceID == exercice.id }
+        for inv in immoInv where !inv.docPath.isEmpty {
+            let src = URL(fileURLWithPath: inv.docPath)
+            let dest = pieces.appendingPathComponent("G - immo - \(src.lastPathComponent)")
+            try? fm.removeItem(at: dest)
+            try? fm.copyItem(at: src, to: dest)
+        }
+        if !immoInv.isEmpty {
+            var txt = "Factures d'investissement (immobilisations)\n\(dossier.nom) — Exercice \(exercice.libelle)\n\n"
+            txt += "Date;Compte;Désignation;Montant HT;Document\n"
+            let df = DateFormatter(); df.dateFormat = "dd/MM/yyyy"
+            for inv in immoInv.sorted(by: { $0.ordre < $1.ordre }) {
+                let d = inv.designation.replacingOccurrences(of: ";", with: ",")
+                txt += "\(df.string(from: inv.date));\(inv.compte);\(d);\(num(inv.montant));\(inv.docName)\n"
+            }
+            try? txt.data(using: .utf8)?.write(to: root.appendingPathComponent("Immobilisations.csv"))
+        }
 
         // Rapprochements.txt
         if !recons.isEmpty {
@@ -516,10 +535,11 @@ struct CycleBalanceView: View {
                     Text("Comptes (\(accounts.count))").tag(0)
                     if cycle == .tresorerie { Text("Rapprochements").tag(1) }
                     if cycle == .fiscal { Text("TVA").tag(3) }
+                    if cycle == .immobilisations { Text("Factures").tag(5) }
                     Text("Contrôles").tag(2)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: (cycle == .tresorerie || cycle == .fiscal) ? 380 : 280)
+                .frame(width: (cycle == .tresorerie || cycle == .fiscal || cycle == .immobilisations) ? 380 : 280)
                 .padding(.top, 4)
             }
             .padding()
@@ -533,6 +553,8 @@ struct CycleBalanceView: View {
                                         bankAccounts: accounts.filter { $0.accountNumber.hasPrefix("51") })
             } else if tab == 3 && cycle == .fiscal {
                 TvaControlView(exerciceID: exerciceID)
+            } else if tab == 5 && cycle == .immobilisations {
+                ImmoInvoicesView(exerciceID: exerciceID)
             } else if accounts.isEmpty {
                 if exerciceAccounts.isEmpty {
                     PlaceholderView(title: "Aucune balance importée",
@@ -1941,6 +1963,137 @@ private struct Ca3EntryRow: View {
             if baseText.isEmpty { baseText = entry.base == 0 ? "" : String(format: "%.0f", entry.base) }
             if tvaText.isEmpty { tvaText = entry.tva == 0 ? "" : String(format: "%.0f", entry.tva) }
         }
+    }
+
+    private func parse(_ s: String) -> Double {
+        Double(s.replacingOccurrences(of: "\u{00A0}", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: ",", with: ".")
+            .trimmingCharacters(in: .whitespaces)) ?? 0
+    }
+}
+
+// MARK: - Factures d'investissement (Cycle G — Immobilisations)
+
+struct ImmoInvoicesView: View {
+    let exerciceID: UUID
+
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allInvoices: [ImmoInvoice]
+    @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
+
+    @State private var pendingItem: ImmoInvoice?
+    @State private var showImporter = false
+
+    private var invoices: [ImmoInvoice] {
+        allInvoices.filter { $0.exerciceID == exerciceID }.sorted { $0.ordre < $1.ordre }
+    }
+    private var immoAccounts: [BalanceAccount] {
+        allAccounts.filter {
+            $0.exerciceID == exerciceID
+            && ["20", "21", "23", "26", "27"].contains(String($0.accountNumber.prefix(2)))
+        }
+    }
+    private var total: Double { invoices.reduce(0) { $0 + $1.montant } }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Factures d'investissement").font(.headline)
+                Text("Colle ici les factures d'immobilisation et lie le justificatif (clic = ouverture). Elles sont incluses dans le dossier remis à l'expert-comptable.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding([.horizontal, .top])
+
+            List {
+                HStack {
+                    Text("Date").frame(width: 120, alignment: .leading)
+                    Text("Compte immo").frame(width: 200, alignment: .leading)
+                    Text("Désignation / fournisseur").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Montant HT").frame(width: 110, alignment: .trailing)
+                    Text("Pièce").frame(width: 150, alignment: .leading)
+                    Text("").frame(width: 28)
+                }
+                .font(.caption).foregroundStyle(.secondary)
+
+                ForEach(invoices) { inv in
+                    ImmoInvoiceRow(
+                        invoice: inv, immoAccounts: immoAccounts,
+                        onCommit: { try? modelContext.save() },
+                        onDelete: { removeDoc(inv); modelContext.delete(inv); try? modelContext.save() },
+                        onLink: { pendingItem = inv; showImporter = true },
+                        onOpen: { openJustificationDocument(path: inv.docPath, bookmark: inv.docBookmark) },
+                        onRemoveDoc: { removeDoc(inv); try? modelContext.save() }
+                    )
+                }
+
+                HStack {
+                    Button {
+                        modelContext.insert(ImmoInvoice(exerciceID: exerciceID, ordre: invoices.count))
+                        try? modelContext.save()
+                    } label: { Label("Ajouter une facture", systemImage: "plus.circle") }
+                    Spacer()
+                    Text("Total HT : \(formatEuro(total))").fontWeight(.semibold).monospacedDigit()
+                }
+                .font(.callout)
+            }
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first, let inv = pendingItem { attachDoc(inv, url) }
+            pendingItem = nil
+        }
+    }
+
+    private func attachDoc(_ inv: ImmoInvoice, _ url: URL) {
+        let label = inv.compte.isEmpty ? "immo" : inv.compte
+        guard let copied = JustificatifStore.copyIn(source: url, exerciceID: exerciceID, accountNumber: "G \(label)") else { return }
+        inv.docPath = copied.path; inv.docName = copied.name; inv.docBookmark = nil
+        try? modelContext.save()
+    }
+    private func removeDoc(_ inv: ImmoInvoice) {
+        if !inv.docPath.isEmpty { try? FileManager.default.removeItem(atPath: inv.docPath) }
+        inv.docPath = ""; inv.docName = ""; inv.docBookmark = nil
+    }
+}
+
+private struct ImmoInvoiceRow: View {
+    @Bindable var invoice: ImmoInvoice
+    let immoAccounts: [BalanceAccount]
+    var onCommit: () -> Void
+    var onDelete: () -> Void
+    var onLink: () -> Void
+    var onOpen: () -> Void
+    var onRemoveDoc: () -> Void
+    @State private var montantText = ""
+
+    var body: some View {
+        HStack {
+            DatePicker("", selection: $invoice.date, displayedComponents: .date)
+                .labelsHidden().frame(width: 120)
+                .onChange(of: invoice.date) { _, _ in onCommit() }
+            Picker("", selection: $invoice.compte) {
+                Text("—").tag("")
+                ForEach(immoAccounts) { a in
+                    Text("\(a.accountNumber) \(a.accountLabel)").tag(a.accountNumber)
+                }
+            }
+            .labelsHidden().frame(width: 200)
+            .onChange(of: invoice.compte) { _, _ in onCommit() }
+            TextField("Fournisseur / objet", text: $invoice.designation)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: invoice.designation) { _, _ in onCommit() }
+            TextField("0", text: $montantText)
+                .textFieldStyle(.roundedBorder).frame(width: 110)
+                .multilineTextAlignment(.trailing).monospacedDigit()
+                .onSubmit { invoice.montant = parse(montantText); onCommit() }
+            RefCell(hasDocument: invoice.hasDocument, docName: invoice.docName,
+                    onOpen: onOpen, onLink: onLink, onRemove: onRemoveDoc)
+                .frame(width: 150, alignment: .leading)
+            Button(role: .destructive, action: onDelete) { Image(systemName: "trash") }
+                .buttonStyle(.borderless).frame(width: 28)
+        }
+        .padding(.vertical, 2)
+        .onAppear { if montantText.isEmpty { montantText = invoice.montant == 0 ? "" : String(format: "%.0f", invoice.montant) } }
     }
 
     private func parse(_ s: String) -> Double {

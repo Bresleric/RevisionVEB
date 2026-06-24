@@ -443,6 +443,34 @@ final class ReconItem {
     var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
 }
 
+/// Facture d'investissement (immobilisation) avec piece liee, par exercice.
+@Model
+final class ImmoInvoice {
+    var id: UUID = UUID()
+    var exerciceID: UUID = UUID()
+    var date: Date = Date()
+    var compte: String = ""        // compte immo concerne (20/21/23/26/27)
+    var designation: String = ""   // fournisseur / objet
+    var montant: Double = 0        // montant HT immobilise
+    var docName: String = ""
+    var docPath: String = ""
+    var docBookmark: Data? = nil
+    var ordre: Int = 0
+
+    init(id: UUID = UUID(), exerciceID: UUID, date: Date = Date(), compte: String = "",
+         designation: String = "", montant: Double = 0, ordre: Int = 0) {
+        self.id = id
+        self.exerciceID = exerciceID
+        self.date = date
+        self.compte = compte
+        self.designation = designation
+        self.montant = montant
+        self.ordre = ordre
+    }
+
+    var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
+}
+
 /// Etat d'un point de controle (statut + observation), par exercice et par cycle.
 @Model
 final class ControlState {
