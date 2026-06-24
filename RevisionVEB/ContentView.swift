@@ -1380,25 +1380,24 @@ enum ImmoExcelImport {
     static func parse(_ url: URL) -> [(compte: String, assets: [AssetRow])] {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url) else { return [] }
 
         var result: [(String, [AssetRow])] = []
-        let tempFile = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".xlsx")
-        try? data.write(to: tempFile)
-        defer { try? FileManager.default.removeItem(at: tempFile) }
 
         do {
             // Parse ZIP → sharedStrings (texte) et worksheets (données)
-            let strings = try parseSharedStrings(tempFile)
-            let sheets = try listWorksheets(tempFile)
+            // Pass the URL directly to unzip, not a temp file copy
+            let strings = try parseSharedStrings(url)
+            let sheets = try listWorksheets(url)
 
             for sheetFile in sheets {
-                let data = try parseWorksheet(tempFile, sheetFile, strings)
+                let data = try parseWorksheet(url, sheetFile, strings)
                 if !data.assets.isEmpty {
                     result.append((data.compte, data.assets))
                 }
             }
-        } catch {}
+        } catch {
+            print("❌ ImmoExcelImport.parse error: \(error)")
+        }
 
         return result
     }
@@ -2541,23 +2540,34 @@ struct ImmoAssetsView: View {
     }
 
     private func importExcel(_ url: URL) {
+        print("🔵 ImportExcel: Starting with \(url.lastPathComponent)")
         let parsed = ImmoExcelImport.parse(url)
-        guard !parsed.isEmpty else { importMsg = "Aucun bien détecté"; return }
+        print("🔵 ImportExcel: Parsed \(parsed.count) comptes, \(parsed.reduce(0) { $0 + $1.assets.count }) total assets")
+        guard !parsed.isEmpty else {
+            print("🔴 ImportExcel: Parsed empty!")
+            importMsg = "Aucun bien détecté";
+            return
+        }
 
         for asset in allAssets where asset.exerciceID == exerciceID {
             modelContext.delete(asset)
         }
 
+        var totalInserted = 0
         for (compte, assetRows) in parsed {
+            print("🔵 ImportExcel: Compte \(compte) - \(assetRows.count) assets")
             for (i, row) in assetRows.enumerated() {
                 modelContext.insert(ImmoAsset(exerciceID: exerciceID, compte: compte, numeroImmo: row.numeroImmo,
                                              libelle: row.libelle, montantHT: row.montantHT, dateAcquisition: row.date,
                                              tauxAmort: row.taux, amortAnterieur: row.amortAnterieur,
                                              amortExercice: row.amortExercice, ordre: i))
+                totalInserted += 1
             }
         }
         try? modelContext.save()
-        importMsg = "\(parsed.reduce(0) { $0 + $1.assets.count }) biens importés"
+        let msg = "\(totalInserted) biens importés"
+        print("✅ ImportExcel: \(msg)")
+        importMsg = msg
     }
 }
 
