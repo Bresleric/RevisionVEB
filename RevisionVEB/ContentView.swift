@@ -1410,10 +1410,14 @@ enum ImmoExcelImport {
         proc.standardOutput = pipe
         try proc.run()
         let xmlData = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let xml = String(data: xmlData, encoding: .utf8) else { return [] }
+        guard let xml = String(data: xmlData, encoding: .utf8) else {
+            print("  ❌ parseSharedStrings: Could not decode XML")
+            return []
+        }
 
         var strings: [String] = []
-        let pattern = "<t>([^<]*)</t>"
+        // Match <t ...> with optional attributes, not just <t>
+        let pattern = "<t[^>]*>([^<]*)</t>"
         if let regex = try? NSRegularExpression(pattern: pattern) {
             let matches = regex.matches(in: xml, range: NSRange(xml.startIndex..., in: xml))
             for match in matches {
@@ -1422,6 +1426,7 @@ enum ImmoExcelImport {
                 }
             }
         }
+        print("  ✅ parseSharedStrings: Found \(strings.count) strings")
         return strings
     }
 
@@ -1433,7 +1438,10 @@ enum ImmoExcelImport {
         proc.standardOutput = pipe
         try proc.run()
         let output = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let list = String(data: output, encoding: .utf8) else { return [] }
+        guard let list = String(data: output, encoding: .utf8) else {
+            print("  ❌ listWorksheets: Could not decode output")
+            return []
+        }
 
         var sheets: [String] = []
         for line in list.components(separatedBy: "\n") {
@@ -1443,6 +1451,7 @@ enum ImmoExcelImport {
                 }
             }
         }
+        print("  ✅ listWorksheets: Found \(sheets.count) sheets: \(sheets)")
         return sheets.sorted()
     }
 
@@ -1454,7 +1463,10 @@ enum ImmoExcelImport {
         proc.standardOutput = pipe
         try proc.run()
         let xmlData = pipe.fileHandleForReading.readDataToEndOfFile()
-        guard let xml = String(data: xmlData, encoding: .utf8) else { return ("", []) }
+        guard let xml = String(data: xmlData, encoding: .utf8) else {
+            print("    ❌ parseWorksheet(\(sheet)): Could not decode XML")
+            return ("", [])
+        }
 
         var compte = ""
         var assets: [AssetRow] = []
@@ -1463,6 +1475,7 @@ enum ImmoExcelImport {
         let rowPattern = "<row[^>]*>(.*?)</row>"
         if let rowRegex = try? NSRegularExpression(pattern: rowPattern) {
             let rowMatches = rowRegex.matches(in: xml, range: NSRange(xml.startIndex..., in: xml))
+            print("    📊 parseWorksheet(\(sheet)): Found \(rowMatches.count) rows")
 
             for rowMatch in rowMatches {
                 guard let rowRange = Range(rowMatch.range(at: 1), in: xml) else { continue }
@@ -1493,6 +1506,7 @@ enum ImmoExcelImport {
                 let text = cellValues.joined(separator: " ")
                 if text.contains("Compte") && text.contains(" - ") {
                     compte = text.components(separatedBy: " - ").first?.replacingOccurrences(of: "Compte ", with: "").trimmingCharacters(in: .whitespaces) ?? ""
+                    print("      🔍 Found compte: \(compte)")
                 } else if !compte.isEmpty && cellValues.count >= 7 && !cellValues[0].isEmpty && cellValues[0].first?.isNumber == true {
                     guard let montantHT = Double(cellValues[2].replacingOccurrences(of: ",", with: ".")),
                           let taux = Double(cellValues[4].replacingOccurrences(of: ",", with: ".")),
@@ -1506,6 +1520,7 @@ enum ImmoExcelImport {
             }
         }
 
+        print("    ✅ parseWorksheet(\(sheet)): Found compte '\(compte)' with \(assets.count) assets")
         return (compte, assets)
     }
 }
