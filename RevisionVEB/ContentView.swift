@@ -1163,7 +1163,7 @@ private struct ReconItemRow: View {
 
 enum CA3Import {
     struct Line { let taux: String; let base: Double; let taxe: Double }
-    struct Result { let periode: String; let lines: [Line]; let deductible: Double }
+    struct Result { let periode: String; let lines: [Line]; let deductible: Double; let creditM1: Double }
 
     private static let frMonths: [String: Int] = [
         "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
@@ -1251,18 +1251,35 @@ enum CA3Import {
             }
         }
 
-        // TVA déductible : brute fiable -> on cherche d tel que |brute - d| réapparaisse plus loin (= net)
+        // TVA déductible : brute fiable -> on cherche d (total déductible) tel que |brute - d| réapparaisse plus loin (= net)
         let brute = lines.reduce(0.0) { $0 + $1.taxe }
-        var deductible = 0.0
+        let hasReport = raw.contains("Report du crédit")
+        var totalDed = 0.0, report = 0.0
         if let idxBrute = nums.firstIndex(where: { abs($0 - brute) < 1 }) {
+            var idxD = -1
             for j in (idxBrute + 1)..<nums.count {
-                let d = nums[j]
-                if nums[(j + 1)...].contains(where: { abs($0 - abs(brute - d)) < 1 }) {
-                    deductible = d; break
+                if nums[(j + 1)...].contains(where: { abs($0 - abs(brute - nums[j])) < 1 }) {
+                    totalDed = nums[j]; idxD = j; break
                 }
             }
+            if idxD > idxBrute {
+                // sous-totaux déductibles entre la brute et le total ; on scinde un éventuel nombre collé
+                var subs = Array(nums[(idxBrute + 1)..<idxD])
+                if abs(subs.reduce(0, +) - totalDed) >= 1, let big = subs.firstIndex(where: { $0 > totalDed }) {
+                    let others = subs.enumerated().filter { $0.offset != big }.map { $0.element }.reduce(0, +)
+                    let target = totalDed - others
+                    let s = String(Int(subs[big]))
+                    for k in 1..<s.count {
+                        if let a = Double(s.prefix(k)), let b = Double(s.dropFirst(k)), abs(a + b - target) < 1 {
+                            subs.remove(at: big); subs.append(a); subs.append(b); break
+                        }
+                    }
+                }
+                // ligne 22 (report) = dernier sous-total si la déclaration mentionne un report
+                report = hasReport ? (subs.last ?? 0) : 0
+            }
         }
-        return Result(periode: periode, lines: lines, deductible: deductible)
+        return Result(periode: periode, lines: lines, deductible: totalDed - report, creditM1: report)
     }
 }
 
@@ -1294,6 +1311,10 @@ struct TvaControlView: View {
     }
     private var deductDict: [String: Double] {
         Dictionary(ca3Periods.filter { $0.exerciceID == exerciceID }.map { ($0.periode, $0.tvaDeductible) },
+                   uniquingKeysWith: { _, l in l })
+    }
+    private var creditM1Dict: [String: Double] {
+        Dictionary(ca3Periods.filter { $0.exerciceID == exerciceID }.map { ($0.periode, $0.creditM1) },
                    uniquingKeysWith: { _, l in l })
     }
     /// Synthèse par période : collectée (Σ taxe), déductible (CA3), à payer (= collectée − déductible).
@@ -1365,7 +1386,8 @@ struct TvaControlView: View {
                 modelContext.insert(Ca3Entry(exerciceID: exerciceID, periode: res.periode,
                                              taux: line.taux, base: line.base, tva: line.taxe, ordre: i))
             }
-            modelContext.insert(Ca3Period(exerciceID: exerciceID, periode: res.periode, tvaDeductible: res.deductible))
+            modelContext.insert(Ca3Period(exerciceID: exerciceID, periode: res.periode,
+                                          tvaDeductible: res.deductible, creditM1: res.creditM1))
             imported += 1
         }
         try? modelContext.save()
@@ -1507,9 +1529,16 @@ struct TvaControlView: View {
             return (es.reduce(0) { $0 + $1.base }, es.reduce(0) { $0 + $1.tva })
         }
         func coll(_ p: String) -> Double { rates.reduce(0.0) { $0 + vals(p, $1).taxe } }
-        func net(_ p: String) -> Double { coll(p) - (deductDict[p] ?? 0) }
+        func net(_ p: String) -> Double { coll(p) - (deductDict[p] ?? 0) - (creditM1Dict[p] ?? 0) }
+        func credit(_ p: String) -> Double { max(-net(p), 0) }
+        // report attendu = crédit du mois précédent (vérification de la chaîne)
+        func expectedReport(_ p: String) -> Double {
+            guard let i = periodes.firstIndex(of: p), i > 0 else { return 0 }
+            return credit(periodes[i - 1])
+        }
         let totColl = periodes.reduce(0.0) { $0 + coll($1) }
         let totDed  = periodes.reduce(0.0) { $0 + (deductDict[$1] ?? 0) }
+        let totM1   = periodes.reduce(0.0) { $0 + (creditM1Dict[$1] ?? 0) }
         let totPayer  = periodes.reduce(0.0) { $0 + max(net($1), 0) }
         let totCredit = periodes.reduce(0.0) { $0 + max(-net($1), 0) }
         let cw: CGFloat = 100
@@ -1526,6 +1555,7 @@ struct TvaControlView: View {
                         }
                         decCell("Collectée", w: cw, bold: true)
                         decCell("Déductible", w: cw, bold: true)
+                        decCell("Crédit M-1", w: cw, bold: true)
                         decCell("TVA à payer", w: 115, bold: true)
                         decCell("Crédit reporté", w: 115, bold: true)
                     }
@@ -1547,6 +1577,11 @@ struct TvaControlView: View {
                             }
                             decCell(formatEuro(coll(p)), w: cw)
                             decCell(formatEuro(deductDict[p] ?? 0), w: cw, color: .secondary)
+                            // Crédit M-1 (report) : rouge si ≠ crédit du mois précédent (anomalie de report)
+                            let m1 = creditM1Dict[p] ?? 0
+                            let anomalie = abs(m1 - expectedReport(p)) > 1
+                            decCell(m1 > 0.5 ? formatEuro(m1) : "—", w: cw,
+                                    color: m1 > 0.5 ? (anomalie ? .red : .green) : muted)
                             decCell(n > 0.5 ? formatEuro(n) : "—", w: 115, color: n > 0.5 ? .primary : muted)
                             decCell(n < -0.5 ? formatEuro(-n) : "—", w: 115, color: n < -0.5 ? .blue : muted)
                         }
@@ -1562,6 +1597,7 @@ struct TvaControlView: View {
                         }
                         decCell(formatEuro(totColl), w: cw, bold: true)
                         decCell(formatEuro(totDed), w: cw, bold: true)
+                        decCell(totM1 > 0.5 ? formatEuro(totM1) : "—", w: cw, bold: true)
                         decCell(totPayer > 0.5 ? formatEuro(totPayer) : "—", w: 115, bold: true)
                         decCell(totCredit > 0.5 ? formatEuro(totCredit) : "—", w: 115, bold: true,
                                 color: totCredit > 0.5 ? .blue : .primary)

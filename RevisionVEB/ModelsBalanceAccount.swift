@@ -349,12 +349,14 @@ final class Ca3Entry {
 final class Ca3Period {
     var exerciceID: UUID = UUID()
     var periode: String = ""
-    var tvaDeductible: Double = 0
+    var tvaDeductible: Double = 0   // déductible sur achats (hors report)
+    var creditM1: Double = 0        // report du crédit de la déclaration précédente (ligne 22)
 
-    init(exerciceID: UUID, periode: String, tvaDeductible: Double = 0) {
+    init(exerciceID: UUID, periode: String, tvaDeductible: Double = 0, creditM1: Double = 0) {
         self.exerciceID = exerciceID
         self.periode = periode
         self.tvaDeductible = tvaDeductible
+        self.creditM1 = creditM1
     }
 }
 
