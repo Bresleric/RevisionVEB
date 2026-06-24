@@ -1348,8 +1348,10 @@ struct TvaControlView: View {
         Dictionary(ca3Periods.filter { $0.exerciceID == exerciceID }.map { ($0.periode, $0.ligne20) },
                    uniquingKeysWith: { _, l in l })
     }
+    /// Total TVA déductible (ligne 23) = déductible sur achats (l.19+20) + report (l.22).
+    /// On part du déductible stocké (fiable) pour rester juste même si le détail 19/20 n'a pas encore été ré-importé.
     private func ligne23(_ p: String) -> Double {
-        (ligne19Dict[p] ?? 0) + (ligne20Dict[p] ?? 0) + (creditM1Dict[p] ?? 0)
+        (deductDict[p] ?? 0) + (creditM1Dict[p] ?? 0)
     }
     /// Synthèse par période : collectée (Σ taxe), déductible (CA3), à payer (= collectée − déductible).
     private var periodSummary: [(periode: String, collectee: Double, deductible: Double, net: Double)] {
@@ -1809,7 +1811,7 @@ struct TvaControlView: View {
                         decCell("Bases → A1", w: cw, bold: true)
                         decCell("TVA → L.16", w: cw, bold: true)
                         decCell("L.19+20+22 = L.23", w: 150, bold: true)
-                        decCell("L.16 − L.23 = net", w: 150, bold: true)
+                        decCell("L.16 − L.23 = à payer / crédit (L.25)", w: 230, bold: true)
                         statutCell(ok: true).hidden().overlay(Text("Statut").font(.callout.bold()))
                     }
                     .background(Color.gray.opacity(0.10))
@@ -1819,14 +1821,18 @@ struct TvaControlView: View {
                         let l16 = ligne16Dict[p] ?? 0
                         let okBases = abs(sumBase(p) - a1) < 1 && a1 > 0
                         let okTva = abs(coll(p) - l16) < 1 && l16 > 0
+                        // L.19 + L.20 + L.22 (report) doit reconstituer le total déductible L.23
                         let okDed = abs((ligne19Dict[p] ?? 0) + (ligne20Dict[p] ?? 0) + (creditM1Dict[p] ?? 0) - ligne23(p)) < 1
-                        let okDecompte = abs((l16 - ligne23(p)) - net(p)) < 1
+                        // L.16 − L.23 = TVA à payer (si > 0) ou Crédit de TVA L.25 (si < 0)
+                        let resultat = l16 - ligne23(p)
+                        let okDecompte = l16 > 0 && abs(resultat - net(p)) < 1
                         HStack(spacing: 0) {
                             decCell(p, w: 80, align: .leading)
                             decCell(okBases ? "✓" : "✗", w: cw, color: okBases ? .green : .red)
                             decCell(okTva ? "✓" : "✗", w: cw, color: okTva ? .green : .red)
                             decCell(okDed ? "✓" : "✗", w: 150, color: okDed ? .green : .red)
-                            decCell(okDecompte ? "✓" : "✗", w: 150, color: okDecompte ? .green : .red)
+                            decCell(resultat >= 0 ? "à payer \(formatEuro(resultat))" : "crédit \(formatEuro(-resultat))",
+                                    w: 230, color: okDecompte ? (resultat < 0 ? .blue : .green) : .red)
                             statutCell(ok: okBases && okTva && okDed && okDecompte)
                         }
                         Divider()
