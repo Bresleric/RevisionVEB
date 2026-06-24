@@ -1485,88 +1485,94 @@ struct TvaControlView: View {
         net < -0.5 ? "\(formatEuro(-net)) (crédit)" : formatEuro(net)
     }
 
+    private func decCell(_ s: String, w: CGFloat, align: Alignment = .trailing,
+                         bold: Bool = false, color: Color = .primary) -> some View {
+        Text(s)
+            .font(.callout).fontWeight(bold ? .semibold : .regular)
+            .monospacedDigit().foregroundStyle(color)
+            .lineLimit(1)
+            .frame(width: w, alignment: align)
+            .padding(.vertical, 4).padding(.horizontal, 4)
+    }
+
+    /// Tableau croisé I-1 : une ligne par mois, colonnes Base + TVA par taux.
     private var declarationsView: some View {
-        let totalColl = periodSummary.reduce(0.0) { $0 + $1.collectee }
-        let totalDed  = periodSummary.reduce(0.0) { $0 + $1.deductible }
-        let totalNet  = totalColl - totalDed
+        let rates = Array(Set(entries.map { $0.taux }).filter { !$0.isEmpty && $0 != "—" })
+            .sorted { (TvaHelper.rate($0) ?? 999) < (TvaHelper.rate($1) ?? 999) }
+        let periodes = Set(entries.map { $0.periode }).union(deductDict.keys)
+            .filter { !$0.isEmpty }.sorted()
+
+        func vals(_ p: String, _ t: String) -> (base: Double, taxe: Double) {
+            let es = entries.filter { $0.periode == p && $0.taux == t }
+            return (es.reduce(0) { $0 + $1.base }, es.reduce(0) { $0 + $1.tva })
+        }
+        func coll(_ p: String) -> Double { rates.reduce(0.0) { $0 + vals(p, $1).taxe } }
+        let totColl = periodes.reduce(0.0) { $0 + coll($1) }
+        let totDed  = periodes.reduce(0.0) { $0 + (deductDict[$1] ?? 0) }
+        let cw: CGFloat = 100
 
         return VStack(alignment: .leading, spacing: 0) {
-            List {
-                // I-1 : synthèse par déclaration (collectée / déductible / à payer)
-                Section("Synthèse par déclaration (I-1)") {
-                    HStack {
-                        Text("Période").frame(width: 90, alignment: .leading)
-                        Text("TVA collectée").frame(maxWidth: .infinity, alignment: .trailing)
-                        Text("TVA déductible").frame(width: 150, alignment: .trailing)
-                        Text("TVA à payer").frame(width: 150, alignment: .trailing)
-                    }
-                    .font(.caption).foregroundStyle(.secondary)
-
-                    ForEach(periodSummary, id: \.periode) { s in
-                        HStack {
-                            Text(s.periode).monospaced().frame(width: 90, alignment: .leading)
-                            Text(formatEuro(s.collectee)).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing)
-                            Text(formatEuro(s.deductible)).monospacedDigit().frame(width: 150, alignment: .trailing)
-                            Text(netLabel(s.net)).monospacedDigit().frame(width: 150, alignment: .trailing)
-                                .foregroundStyle(s.net < -0.5 ? .blue : .primary)
+            ScrollView([.horizontal, .vertical]) {
+                VStack(alignment: .leading, spacing: 0) {
+                    // En-tête
+                    HStack(spacing: 0) {
+                        decCell("Période", w: 80, align: .leading, bold: true)
+                        ForEach(rates, id: \.self) { r in
+                            decCell("Base \(tauxLabel(r))", w: cw, bold: true)
+                            decCell("TVA \(tauxLabel(r))", w: cw, bold: true)
                         }
+                        decCell("Collectée", w: cw, bold: true)
+                        decCell("Déductible", w: cw, bold: true)
+                        decCell("À payer", w: 120, bold: true)
                     }
+                    .background(Color.gray.opacity(0.10))
+                    Divider()
 
-                    HStack {
-                        Text("Total (\(periodSummary.count) décl.)").fontWeight(.semibold)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Text(formatEuro(totalColl)).monospacedDigit().fontWeight(.semibold).frame(width: 150, alignment: .trailing)
-                        Text(formatEuro(totalDed)).monospacedDigit().fontWeight(.semibold).frame(width: 150, alignment: .trailing)
-                        Text(netLabel(totalNet)).monospacedDigit().fontWeight(.semibold).frame(width: 150, alignment: .trailing)
-                            .foregroundStyle(totalNet < -0.5 ? .blue : .primary)
-                    }
-                }
-
-                // Détail par taux (base HT + TVA collectée)
-                Section("Détail par taux") {
-                    HStack {
-                        Text("Période").frame(width: 90, alignment: .leading)
-                        Text("Taux").frame(width: 90, alignment: .leading)
-                        Text("Base HT").frame(maxWidth: .infinity, alignment: .trailing)
-                        Text("TVA collectée").frame(width: 140, alignment: .trailing)
-                        Text("").frame(width: 30)
-                    }
-                    .font(.caption).foregroundStyle(.secondary)
-
-                    ForEach(entries) { e in
-                        Ca3EntryRow(entry: e,
-                                    onCommit: { try? modelContext.save() },
-                                    onDelete: { modelContext.delete(e); try? modelContext.save() })
-                    }
-
-                    HStack(spacing: 16) {
-                        Button {
-                            modelContext.insert(Ca3Entry(exerciceID: exerciceID, ordre: entries.count))
-                            try? modelContext.save()
-                        } label: { Label("Ajouter une ligne", systemImage: "plus.circle") }
-                        Button {
-                            showCA3Importer = true
-                        } label: { Label("Importer des CA3 (PDF)…", systemImage: "doc.text.viewfinder") }
-                        if let m = importMessage {
-                            Text(m).font(.caption).foregroundStyle(.green)
+                    // Une ligne par mois
+                    ForEach(periodes, id: \.self) { p in
+                        let net = coll(p) - (deductDict[p] ?? 0)
+                        HStack(spacing: 0) {
+                            decCell(p, w: 80, align: .leading)
+                            ForEach(rates, id: \.self) { r in
+                                let c = vals(p, r)
+                                decCell(c.base == 0 ? "—" : formatEuro(c.base), w: cw,
+                                        color: c.base == 0 ? Color(nsColor: .tertiaryLabelColor) : .primary)
+                                decCell(c.taxe == 0 ? "—" : formatEuro(c.taxe), w: cw,
+                                        color: c.taxe == 0 ? Color(nsColor: .tertiaryLabelColor) : .secondary)
+                            }
+                            decCell(formatEuro(coll(p)), w: cw)
+                            decCell(formatEuro(deductDict[p] ?? 0), w: cw, color: .secondary)
+                            decCell(netLabel(net), w: 120, color: net < -0.5 ? .blue : .primary)
                         }
+                        Divider()
                     }
-                    .font(.callout)
+
+                    // Total
+                    HStack(spacing: 0) {
+                        decCell("Total", w: 80, align: .leading, bold: true)
+                        ForEach(rates, id: \.self) { r in
+                            decCell(formatEuro(periodes.reduce(0.0) { $0 + vals($1, r).base }), w: cw, bold: true)
+                            decCell(formatEuro(periodes.reduce(0.0) { $0 + vals($1, r).taxe }), w: cw, bold: true)
+                        }
+                        decCell(formatEuro(totColl), w: cw, bold: true)
+                        decCell(formatEuro(totDed), w: cw, bold: true)
+                        decCell(netLabel(totColl - totDed), w: 120, bold: true,
+                                color: (totColl - totDed) < -0.5 ? .blue : .primary)
+                    }
+                    .background(Color.gray.opacity(0.10))
                 }
+                .padding()
             }
 
             Divider()
-            HStack(spacing: 24) {
-                Text("Totaux par taux :").font(.subheadline).fontWeight(.medium)
-                ForEach(declTotals, id: \.taux) { t in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(tauxLabel(t.taux)).font(.caption).foregroundStyle(.secondary)
-                        Text("base \(formatEuro(t.base)) · TVA \(formatEuro(t.tva))").font(.callout).monospacedDigit()
-                    }
+            HStack(spacing: 16) {
+                Button { showCA3Importer = true } label: {
+                    Label("Importer des CA3 (PDF)…", systemImage: "doc.text.viewfinder")
                 }
+                if let m = importMessage { Text(m).font(.caption).foregroundStyle(.green) }
                 Spacer()
             }
-            .padding()
+            .font(.callout).padding()
         }
     }
 
