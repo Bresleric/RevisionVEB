@@ -35,7 +35,7 @@ struct ImportView: View {
             for: Invoice.self, AuditResult.self, ImportLog.self, BalanceAccount.self, AccountCycleRule.self,
             Dossier.self, Exercice.self, ControlState.self, AccountJustification.self,
             BankReconciliation.self, ReconItem.self, TvaCompteTaux.self, Ca3Entry.self, Ca3Period.self,
-            ImmoInvoice.self,
+            ImmoInvoice.self, Class2Movement.self,
             configurations: config
         )
         _importManager = StateObject(wrappedValue: ImportManager(modelContext: ModelContext(container)))

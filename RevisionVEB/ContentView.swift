@@ -535,11 +535,14 @@ struct CycleBalanceView: View {
                     Text("Comptes (\(accounts.count))").tag(0)
                     if cycle == .tresorerie { Text("Rapprochements").tag(1) }
                     if cycle == .fiscal { Text("TVA").tag(3) }
-                    if cycle == .immobilisations { Text("Factures").tag(5) }
+                    if cycle == .immobilisations {
+                        Text("Factures").tag(5)
+                        Text("Mouvements").tag(6)
+                    }
                     Text("Contrôles").tag(2)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: (cycle == .tresorerie || cycle == .fiscal || cycle == .immobilisations) ? 380 : 280)
+                .frame(width: cycle == .immobilisations ? 480 : ((cycle == .tresorerie || cycle == .fiscal) ? 380 : 280))
                 .padding(.top, 4)
             }
             .padding()
@@ -555,6 +558,8 @@ struct CycleBalanceView: View {
                 TvaControlView(exerciceID: exerciceID)
             } else if tab == 5 && cycle == .immobilisations {
                 ImmoInvoicesView(exerciceID: exerciceID)
+            } else if tab == 6 && cycle == .immobilisations {
+                Class2MovementsView(exerciceID: exerciceID)
             } else if accounts.isEmpty {
                 if exerciceAccounts.isEmpty {
                     PlaceholderView(title: "Aucune balance importée",
@@ -1321,6 +1326,43 @@ enum CA3Import {
         }
         return Result(periode: periode, lines: lines, deductible: totalDed - report, creditM1: report,
                       caHT: a1, ligne16: ligne16, ligne19: l19, ligne20: l20)
+    }
+}
+
+// MARK: - Import grand livre classe 2 (Cegid)
+
+enum Class2Import {
+    struct Row {
+        let date: Date; let compte: String; let libelle: String
+        let complement: String; let debit: Double; let credit: Double
+    }
+
+    static func parse(_ url: URL) -> [Row] {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        var text: String?
+        for enc in [String.Encoding.utf8, .macOSRoman, .windowsCP1252, .isoLatin1] {
+            if let s = String(data: data, encoding: enc), s.contains(";") { text = s; break }
+        }
+        guard let raw = text else { return [] }
+        let content = raw.replacingOccurrences(of: "\u{FEFF}", with: "")
+            .replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        let df = DateFormatter(); df.dateFormat = "dd/MM/yyyy"
+        func amount(_ s: String) -> Double {
+            Double(s.replacingOccurrences(of: "\u{00A0}", with: "").replacingOccurrences(of: " ", with: "")
+                .replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)) ?? 0
+        }
+        var rows: [Row] = []
+        for line in content.components(separatedBy: "\n").dropFirst() {
+            let c = line.components(separatedBy: ";")
+            guard c.count >= 8, let d = df.date(from: c[0].trimmingCharacters(in: .whitespaces)) else { continue }
+            rows.append(Row(date: d, compte: c[1].trimmingCharacters(in: .whitespaces),
+                            libelle: c[2].trimmingCharacters(in: .whitespaces),
+                            complement: c[3].trimmingCharacters(in: .whitespaces),
+                            debit: amount(c[4]), credit: amount(c[6])))
+        }
+        return rows
     }
 }
 
@@ -2101,6 +2143,102 @@ private struct ImmoInvoiceRow: View {
             .replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: ",", with: ".")
             .trimmingCharacters(in: .whitespaces)) ?? 0
+    }
+}
+
+// MARK: - Mouvements classe 2 (grand livre importé)
+
+struct Class2MovementsView: View {
+    let exerciceID: UUID
+
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allMoves: [Class2Movement]
+    @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
+
+    @State private var showImporter = false
+    @State private var importMsg: String?
+
+    private var moves: [Class2Movement] {
+        allMoves.filter { $0.exerciceID == exerciceID }.sorted { ($0.compte, $0.ordre) < ($1.compte, $1.ordre) }
+    }
+    private var comptes: [String] { Array(Set(moves.map { $0.compte })).sorted() }
+    private func label(_ c: String) -> String {
+        allAccounts.first { $0.exerciceID == exerciceID && $0.accountNumber == c }?.accountLabel ?? ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Mouvements classe 2 (grand livre Cegid)").font(.headline)
+                    Text("Détail des acquisitions / cessions par compte d'immobilisation.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { showImporter = true } label: {
+                    Label("Importer le grand livre (CSV)", systemImage: "doc.text.viewfinder")
+                }
+                if let m = importMsg { Text(m).font(.caption).foregroundStyle(.green) }
+            }
+            .padding([.horizontal, .top])
+
+            Divider().padding(.top, 8)
+
+            if moves.isEmpty {
+                PlaceholderView(title: "Aucun mouvement importé",
+                                message: "Importe le grand livre de la classe 2 exporté de Cegid (CSV).")
+            } else {
+                List {
+                    ForEach(comptes, id: \.self) { c in
+                        let cm = moves.filter { $0.compte == c }
+                        let ouv = cm.filter { $0.isOuverture }.reduce(0.0) { $0 + $1.debit }
+                        let acq = cm.filter { !$0.isOuverture }.reduce(0.0) { $0 + $1.debit }
+                        let ces = cm.reduce(0.0) { $0 + $1.credit }
+                        Section {
+                            ForEach(cm) { m in
+                                HStack {
+                                    Text(m.date.formatted(date: .numeric, time: .omitted))
+                                        .frame(width: 90, alignment: .leading).font(.callout)
+                                    Text(m.isOuverture ? "Report à nouveau (S.A.N.)" : m.libelle)
+                                        .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                                        .foregroundStyle(m.isOuverture ? .secondary : .primary)
+                                    Text(m.debit > 0 ? formatEuro(m.debit) : "—")
+                                        .monospacedDigit().frame(width: 110, alignment: .trailing)
+                                    Text(m.credit > 0 ? formatEuro(m.credit) : "—")
+                                        .monospacedDigit().frame(width: 110, alignment: .trailing)
+                                        .foregroundStyle(m.credit > 0 ? .red : Color(nsColor: .tertiaryLabelColor))
+                                }
+                                .padding(.vertical, 1)
+                            }
+                        } header: {
+                            HStack {
+                                Text("\(c)  \(label(c))").fontWeight(.semibold)
+                                Spacer()
+                                Text("ouverture \(formatEuro(ouv)) · acquis. \(formatEuro(acq)) · cessions \(formatEuro(ces))")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.commaSeparatedText, .text, .plainText],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first { importGL(url) }
+        }
+    }
+
+    private func importGL(_ url: URL) {
+        let rows = Class2Import.parse(url)
+        guard !rows.isEmpty else { importMsg = "Aucun mouvement détecté"; return }
+        for m in allMoves where m.exerciceID == exerciceID { modelContext.delete(m) }
+        for (i, r) in rows.enumerated() {
+            modelContext.insert(Class2Movement(exerciceID: exerciceID, date: r.date, compte: r.compte,
+                                               libelle: r.libelle, complement: r.complement,
+                                               debit: r.debit, credit: r.credit, ordre: i))
+        }
+        try? modelContext.save()
+        importMsg = "\(rows.count) mouvements importés"
     }
 }
 

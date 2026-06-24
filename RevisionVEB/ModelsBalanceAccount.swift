@@ -443,6 +443,36 @@ final class ReconItem {
     var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
 }
 
+/// Mouvement du grand livre classe 2 (immobilisations) importe de Cegid.
+@Model
+final class Class2Movement {
+    var id: UUID = UUID()
+    var exerciceID: UUID = UUID()
+    var date: Date = Date()
+    var compte: String = ""
+    var libelle: String = ""
+    var complement: String = ""
+    var debit: Double = 0
+    var credit: Double = 0
+    var ordre: Int = 0
+
+    init(id: UUID = UUID(), exerciceID: UUID, date: Date = Date(), compte: String = "",
+         libelle: String = "", complement: String = "", debit: Double = 0, credit: Double = 0, ordre: Int = 0) {
+        self.id = id
+        self.exerciceID = exerciceID
+        self.date = date
+        self.compte = compte
+        self.libelle = libelle
+        self.complement = complement
+        self.debit = debit
+        self.credit = credit
+        self.ordre = ordre
+    }
+
+    /// Report à nouveau (valeur d'ouverture), à distinguer des mouvements de l'exercice.
+    var isOuverture: Bool { libelle.contains("S.A.N.") }
+}
+
 /// Facture d'investissement (immobilisation) avec piece liee, par exercice.
 @Model
 final class ImmoInvoice {
