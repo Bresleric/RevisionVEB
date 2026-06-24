@@ -538,11 +538,12 @@ struct CycleBalanceView: View {
                     if cycle == .immobilisations {
                         Text("Factures").tag(5)
                         Text("Mouvements").tag(6)
+                        Text("Amortissements").tag(7)
                     }
                     Text("Contrôles").tag(2)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: cycle == .immobilisations ? 480 : ((cycle == .tresorerie || cycle == .fiscal) ? 380 : 280))
+                .frame(width: cycle == .immobilisations ? 600 : ((cycle == .tresorerie || cycle == .fiscal) ? 380 : 280))
                 .padding(.top, 4)
             }
             .padding()
@@ -560,6 +561,8 @@ struct CycleBalanceView: View {
                 ImmoInvoicesView(exerciceID: exerciceID)
             } else if tab == 6 && cycle == .immobilisations {
                 Class2MovementsView(exerciceID: exerciceID)
+            } else if tab == 7 && cycle == .immobilisations {
+                ImmoAssetsView(exerciceID: exerciceID)
             } else if accounts.isEmpty {
                 if exerciceAccounts.isEmpty {
                     PlaceholderView(title: "Aucune balance importée",
@@ -1363,6 +1366,144 @@ enum Class2Import {
                             debit: amount(c[4]), credit: amount(c[6])))
         }
         return rows
+    }
+}
+
+// MARK: - Importateur Excel Immobilisations
+
+enum ImmoExcelImport {
+    struct AssetRow {
+        let numeroImmo: String; let libelle: String; let montantHT: Double
+        let date: Date; let taux: Double; let amortAnterieur: Double; let amortExercice: Double
+    }
+
+    static func parse(_ url: URL) -> [(compte: String, assets: [AssetRow])] {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url) else { return [] }
+
+        var result: [(String, [AssetRow])] = []
+        let tempFile = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(UUID().uuidString + ".xlsx")
+        try? data.write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        guard let archive = try? Foundation.FileManager.default.contentsOfDirectory(atPath: tempFile.path) else { return [] }
+
+        do {
+            // Parse ZIP → sharedStrings (texte) et worksheets (données)
+            let strings = try parseSharedStrings(tempFile)
+            let sheets = try listWorksheets(tempFile)
+
+            for sheetFile in sheets {
+                let data = try parseWorksheet(tempFile, sheetFile, strings)
+                if !data.assets.isEmpty {
+                    result.append((data.compte, data.assets))
+                }
+            }
+        } catch {}
+
+        return result
+    }
+
+    private static func parseSharedStrings(_ xlsx: URL) throws -> [String] {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        proc.arguments = ["-p", xlsx.path, "xl/sharedStrings.xml"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        try proc.run()
+        let xmlData = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let xml = String(data: xmlData, encoding: .utf8) else { return [] }
+
+        var strings: [String] = []
+        let pattern = "<t>([^<]*)</t>"
+        if let regex = try? NSRegularExpression(pattern: pattern) {
+            let matches = regex.matches(in: xml, range: NSRange(xml.startIndex..., in: xml))
+            for match in matches {
+                if let range = Range(match.range(at: 1), in: xml) {
+                    strings.append(String(xml[range]))
+                }
+            }
+        }
+        return strings
+    }
+
+    private static func listWorksheets(_ xlsx: URL) throws -> [String] {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        proc.arguments = ["-l", xlsx.path]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        try proc.run()
+        let output = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let list = String(data: output, encoding: .utf8) else { return [] }
+
+        var sheets: [String] = []
+        for line in list.components(separatedBy: "\n") {
+            if line.contains("xl/worksheets/sheet") && line.hasSuffix(".xml") {
+                if let file = line.components(separatedBy: "xl/worksheets/").last?.trimmingCharacters(in: .whitespaces) {
+                    sheets.append(file)
+                }
+            }
+        }
+        return sheets.sorted()
+    }
+
+    private static func parseWorksheet(_ xlsx: URL, _ sheet: String, _ strings: [String]) throws -> (compte: String, assets: [AssetRow]) {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        proc.arguments = ["-p", xlsx.path, "xl/worksheets/\(sheet)"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        try proc.run()
+        let xmlData = pipe.fileHandleForReading.readDataToEndOfFile()
+        guard let xml = String(data: xmlData, encoding: .utf8) else { return ("", []) }
+
+        var compte = ""
+        var assets: [AssetRow] = []
+        let df = DateFormatter(); df.dateFormat = "dd/MM/yy"
+
+        let rowPattern = "<row[^>]*>(.*?)</row>"
+        if let rowRegex = try? NSRegularExpression(pattern: rowPattern) {
+            let rowMatches = rowRegex.matches(in: xml, range: NSRange(xml.startIndex..., in: xml))
+
+            for rowMatch in rowMatches {
+                guard let rowRange = Range(rowMatch.range(at: 1), in: xml) else { continue }
+                let rowContent = String(xml[rowRange])
+
+                var cellValues: [String] = []
+                let cellPattern = "<c[^>]*(?:t=\"s\")?>\\s*<v>(\\d+|[^<]*)</v>"
+                if let cellRegex = try? NSRegularExpression(pattern: cellPattern) {
+                    let cellMatches = cellRegex.matches(in: rowContent, range: NSRange(rowContent.startIndex..., in: rowContent))
+                    for cellMatch in cellMatches {
+                        if let valRange = Range(cellMatch.range(at: 1), in: rowContent) {
+                            let val = String(rowContent[valRange])
+                            if let idx = Int(val), idx < strings.count {
+                                cellValues.append(strings[idx])
+                            } else {
+                                cellValues.append(val)
+                            }
+                        }
+                    }
+                }
+
+                let text = cellValues.joined(separator: " ")
+                if text.contains("Compte") && text.contains(" - ") {
+                    compte = text.components(separatedBy: " - ").first?.replacingOccurrences(of: "Compte ", with: "").trimmingCharacters(in: .whitespaces) ?? ""
+                } else if !compte.isEmpty && cellValues.count >= 7 && !cellValues[0].isEmpty && cellValues[0].first?.isNumber == true {
+                    guard let montantHT = Double(cellValues[2].replacingOccurrences(of: ",", with: ".")),
+                          let taux = Double(cellValues[4].replacingOccurrences(of: ",", with: ".")),
+                          let amortAnt = Double(cellValues[5].replacingOccurrences(of: ",", with: ".")),
+                          let amortEx = Double(cellValues[6].replacingOccurrences(of: ",", with: ".")) else { continue }
+
+                    let date = df.date(from: cellValues[3]) ?? Date()
+                    assets.append(AssetRow(numeroImmo: cellValues[0], libelle: cellValues[1], montantHT: montantHT,
+                                          date: date, taux: taux, amortAnterieur: amortAnt, amortExercice: amortEx))
+                }
+            }
+        }
+
+        return (compte, assets)
     }
 }
 
@@ -2239,6 +2380,180 @@ struct Class2MovementsView: View {
         }
         try? modelContext.save()
         importMsg = "\(rows.count) mouvements importés"
+    }
+}
+
+// MARK: - Immobilisations (classe 2) : état d'amortissement
+
+struct ImmoAssetsView: View {
+    let exerciceID: UUID
+
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allAssets: [ImmoAsset]
+    @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
+
+    @State private var showImporter = false
+    @State private var importMsg: String?
+    @State private var tab = 0   // 0 = Tableau, 1 = Contrôles
+
+    private var assets: [ImmoAsset] {
+        allAssets.filter { $0.exerciceID == exerciceID }.sorted { ($0.compte, $0.ordre) < ($1.compte, $1.ordre) }
+    }
+    private var comptes: [(String, [ImmoAsset])] {
+        Dictionary(grouping: assets, by: { $0.compte })
+            .sorted { $0.key < $1.key }
+            .map { ($0.key, $0.value) }
+    }
+    private var anomalies: [(asset: ImmoAsset, messages: [String])] {
+        assets.compactMap { asset in
+            let validation = asset.valider()
+            return validation.statut != .ok ? (asset, validation.messages) : nil
+        }
+    }
+    private func label(_ c: String) -> String {
+        allAccounts.first { $0.exerciceID == exerciceID && $0.accountNumber == c }?.accountLabel ?? ""
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("État d'amortissement").font(.headline)
+                    Text("Tableau d'amortissement des immobilisations par compte (importer depuis Excel).")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { showImporter = true } label: {
+                    Label("Importer Excel", systemImage: "doc.text.viewfinder")
+                }
+                if let m = importMsg { Text(m).font(.caption).foregroundStyle(.green) }
+            }
+            .padding([.horizontal, .top])
+
+            HStack {
+                Picker("", selection: $tab) {
+                    Text("Tableau (\(assets.count))").tag(0)
+                    Text("Contrôles (\(anomalies.count))").tag(1)
+                }
+                .pickerStyle(.segmented).frame(width: 320)
+                Spacer()
+            }
+            .padding([.horizontal, .top], 8)
+
+            Divider()
+
+            if assets.isEmpty {
+                PlaceholderView(title: "Aucun bien importé",
+                                message: "Importe le fichier Excel d'état d'amortissement.")
+            } else if tab == 1 {
+                // Onglet Contrôles
+                if anomalies.isEmpty {
+                    VStack(alignment: .center, spacing: 12) {
+                        Image(systemName: "checkmark.circle.fill").font(.title).foregroundStyle(.green)
+                        Text("Tous les biens sont valides").font(.headline)
+                        Text("Aucune anomalie détectée").foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                } else {
+                    List(anomalies, id: \.asset.id) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack {
+                                Text("\(item.asset.numeroImmo) - \(item.asset.libelle)")
+                                    .font(.callout).fontWeight(.semibold)
+                                Spacer()
+                                Image(systemName: item.messages.count > 1 ? "exclamationmark.octagon.fill" : "exclamationmark.circle.fill")
+                                    .foregroundStyle(item.messages.count > 1 ? .red : .orange)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                ForEach(item.messages, id: \.self) { msg in
+                                    Text("• \(msg)").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.top, 2)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            } else {
+                // Onglet Tableau
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(comptes, id: \.0) { compte, compteAssets in
+                            let totalHT = compteAssets.reduce(0) { $0 + $1.montantHT }
+                            let totalAmort = compteAssets.reduce(0) { $0 + $1.amortTotal }
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack {
+                                    Text("\(compte)  \(label(compte))").fontWeight(.semibold)
+                                    Spacer()
+                                    Text("Total HT: \(formatEuro(totalHT)) · Amort: \(formatEuro(totalAmort))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                                .padding(.horizontal)
+                                .padding(.top, 8)
+
+                                HStack(spacing: 0) {
+                                    Text("N° Immo").frame(width: 70, alignment: .leading).font(.caption2).foregroundStyle(.secondary)
+                                    Text("Libellé").frame(maxWidth: .infinity, alignment: .leading).font(.caption2).foregroundStyle(.secondary)
+                                    Text("Montant HT").frame(width: 100, alignment: .trailing).font(.caption2).foregroundStyle(.secondary)
+                                    Text("Taux %").frame(width: 50, alignment: .center).font(.caption2).foregroundStyle(.secondary)
+                                    Text("Amort. Ant.").frame(width: 90, alignment: .trailing).font(.caption2).foregroundStyle(.secondary)
+                                    Text("Amort. Ex.").frame(width: 90, alignment: .trailing).font(.caption2).foregroundStyle(.secondary)
+                                    Text("Valeur Rés.").frame(width: 90, alignment: .trailing).font(.caption2).foregroundStyle(.secondary)
+                                    Text("").frame(width: 24)
+                                }
+                                .padding(.horizontal)
+
+                                ForEach(compteAssets) { asset in
+                                    let (statut, _) = asset.valider()
+                                    HStack(spacing: 0) {
+                                        Text(asset.numeroImmo).frame(width: 70, alignment: .leading).font(.callout)
+                                        Text(asset.libelle).frame(maxWidth: .infinity, alignment: .leading).font(.callout).lineLimit(1)
+                                        Text(formatEuro(asset.montantHT)).frame(width: 100, alignment: .trailing).font(.callout).monospacedDigit()
+                                        Text(String(format: "%.0f%%", asset.tauxAmort)).frame(width: 50, alignment: .center).font(.callout)
+                                        Text(formatEuro(asset.amortAnterieur)).frame(width: 90, alignment: .trailing).font(.callout).monospacedDigit()
+                                        Text(formatEuro(asset.amortExercice)).frame(width: 90, alignment: .trailing).font(.callout).monospacedDigit()
+                                        Text(formatEuro(asset.valeurResiduelle)).frame(width: 90, alignment: .trailing).font(.callout).monospacedDigit()
+                                            .foregroundStyle(asset.estCompletementAmortie ? .secondary : .primary)
+                                        Image(systemName: statut.icon).foregroundStyle(statut.color).frame(width: 24)
+                                    }
+                                    .padding(.horizontal)
+                                    .padding(.vertical, 3)
+                                }
+
+                                Divider().padding(.horizontal)
+                            }
+                        }
+                    }
+                    .padding(.vertical)
+                }
+            }
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.spreadsheet, .item],
+                      allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first { importExcel(url) }
+        }
+    }
+
+    private func importExcel(_ url: URL) {
+        let parsed = ImmoExcelImport.parse(url)
+        guard !parsed.isEmpty else { importMsg = "Aucun bien détecté"; return }
+
+        for asset in allAssets where asset.exerciceID == exerciceID {
+            modelContext.delete(asset)
+        }
+
+        for (compte, assetRows) in parsed {
+            for (i, row) in assetRows.enumerated() {
+                modelContext.insert(ImmoAsset(exerciceID: exerciceID, compte: compte, numeroImmo: row.numeroImmo,
+                                             libelle: row.libelle, montantHT: row.montantHT, dateAcquisition: row.date,
+                                             tauxAmort: row.taux, amortAnterieur: row.amortAnterieur,
+                                             amortExercice: row.amortExercice, ordre: i))
+            }
+        }
+        try? modelContext.save()
+        importMsg = "\(parsed.reduce(0) { $0 + $1.assets.count }) biens importés"
     }
 }
 

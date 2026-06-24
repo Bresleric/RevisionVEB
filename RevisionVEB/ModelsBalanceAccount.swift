@@ -501,6 +501,79 @@ final class ImmoInvoice {
     var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
 }
 
+/// Bien immobilisé (état d'amortissement depuis le fichier Excel), par exercice et compte.
+@Model
+final class ImmoAsset {
+    var id: UUID = UUID()
+    var exerciceID: UUID = UUID()
+    var compte: String = ""            // classe 2 (20xxx, 21xxx, 26xxx, 27xxx)
+    var numeroImmo: String = ""        // numéro identifiant du bien (ex: "00026")
+    var libelle: String = ""           // description du bien
+    var montantHT: Double = 0          // valeur d'acquisition brute
+    var dateAcquisition: Date = Date() // date d'acquisition
+    var tauxAmort: Double = 0          // taux d'amortissement en % (ex: 20)
+    var amortAnterieur: Double = 0     // amortissements avant l'exercice
+    var amortExercice: Double = 0      // amortissement de l'exercice actuel
+    var ordre: Int = 0
+
+    init(id: UUID = UUID(), exerciceID: UUID, compte: String = "", numeroImmo: String = "",
+         libelle: String = "", montantHT: Double = 0, dateAcquisition: Date = Date(),
+         tauxAmort: Double = 0, amortAnterieur: Double = 0, amortExercice: Double = 0, ordre: Int = 0) {
+        self.id = id
+        self.exerciceID = exerciceID
+        self.compte = compte
+        self.numeroImmo = numeroImmo
+        self.libelle = libelle
+        self.montantHT = montantHT
+        self.dateAcquisition = dateAcquisition
+        self.tauxAmort = tauxAmort
+        self.amortAnterieur = amortAnterieur
+        self.amortExercice = amortExercice
+        self.ordre = ordre
+    }
+
+    var amortTotal: Double { amortAnterieur + amortExercice }
+    var valeurResiduelle: Double { montantHT - amortTotal }
+    var estCompletementAmortie: Bool { valeurResiduelle <= 0.01 }
+
+    func valider() -> (statut: ControlStatus, messages: [String]) {
+        var messages: [String] = []
+
+        // Contrôle 1 : Taux d'amortissement (15-40% courant)
+        if tauxAmort < 0.5 || tauxAmort > 50 {
+            messages.append("Taux \(String(format: "%.0f%%", tauxAmort)) insolite")
+        }
+
+        // Contrôle 2 : Montant négatif ou nul
+        if montantHT <= 0 {
+            messages.append("Montant HT non positif")
+        }
+
+        // Contrôle 3 : Amortissement total > montant HT
+        if amortTotal > montantHT + 0.01 {
+            messages.append("Amort. (\(String(format: "%.0f", amortTotal))) > Montant HT (\(String(format: "%.0f", montantHT)))")
+        }
+
+        // Contrôle 4 : Si complètement amorti, amortissement exercice doit être 0
+        if estCompletementAmortie && amortExercice > 0.01 {
+            messages.append("Bien complètement amorti mais amort. exercice > 0")
+        }
+
+        // Contrôle 5 : Amortissement exercice cohérent avec taux (si non complètement amorti avant)
+        if montantHT > 0 && !estCompletementAmortie && amortExercice > 0 {
+            let tauxAttendu = (montantHT - amortAnterieur) * tauxAmort / 100
+            let ecart = abs(amortExercice - tauxAttendu)
+            if ecart > tauxAttendu * 0.2 {
+                messages.append("Amort. exercice (\(String(format: "%.0f", amortExercice))) vs taux attendu (\(String(format: "%.0f", tauxAttendu)))")
+            }
+        }
+
+        let statut: ControlStatus = messages.isEmpty ? .ok : (messages.count <= 1 ? .aVerifier : .anomalie)
+        return (statut, messages)
+    }
+}
+
+
 /// Etat d'un point de controle (statut + observation), par exercice et par cycle.
 @Model
 final class ControlState {
