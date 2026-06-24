@@ -1163,7 +1163,7 @@ private struct ReconItemRow: View {
 
 enum CA3Import {
     struct Line { let taux: String; let base: Double; let taxe: Double }
-    struct Result { let periode: String; let lines: [Line]; let deductible: Double; let creditM1: Double; let caHT: Double }
+    struct Result { let periode: String; let lines: [Line]; let deductible: Double; let creditM1: Double; let caHT: Double; let ligne16: Double }
 
     private static let frMonths: [String: Int] = [
         "janvier": 1, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5, "juin": 6,
@@ -1254,8 +1254,9 @@ enum CA3Import {
         // TVA déductible : brute fiable -> on cherche d (total déductible) tel que |brute - d| réapparaisse plus loin (= net)
         let brute = lines.reduce(0.0) { $0 + $1.taxe }
         let hasReport = raw.contains("Report du crédit")
-        var totalDed = 0.0, report = 0.0
+        var totalDed = 0.0, report = 0.0, ligne16 = brute
         if let idxBrute = nums.firstIndex(where: { abs($0 - brute) < 1 }) {
+            ligne16 = nums[idxBrute]   // total TVA brute due (ligne 16) tel que déclaré
             var idxD = -1
             for j in (idxBrute + 1)..<nums.count {
                 if nums[(j + 1)...].contains(where: { abs($0 - abs(brute - nums[j])) < 1 }) {
@@ -1279,7 +1280,7 @@ enum CA3Import {
                 report = hasReport ? (subs.last ?? 0) : 0
             }
         }
-        return Result(periode: periode, lines: lines, deductible: totalDed - report, creditM1: report, caHT: a1)
+        return Result(periode: periode, lines: lines, deductible: totalDed - report, creditM1: report, caHT: a1, ligne16: ligne16)
     }
 }
 
@@ -1319,6 +1320,10 @@ struct TvaControlView: View {
     }
     private var caHTDict: [String: Double] {
         Dictionary(ca3Periods.filter { $0.exerciceID == exerciceID }.map { ($0.periode, $0.caHT) },
+                   uniquingKeysWith: { _, l in l })
+    }
+    private var ligne16Dict: [String: Double] {
+        Dictionary(ca3Periods.filter { $0.exerciceID == exerciceID }.map { ($0.periode, $0.ligne16) },
                    uniquingKeysWith: { _, l in l })
     }
     /// Synthèse par période : collectée (Σ taxe), déductible (CA3), à payer (= collectée − déductible).
@@ -1393,7 +1398,8 @@ struct TvaControlView: View {
                                              taux: line.taux, base: line.base, tva: line.taxe, ordre: i))
             }
             modelContext.insert(Ca3Period(exerciceID: exerciceID, periode: res.periode,
-                                          tvaDeductible: res.deductible, creditM1: res.creditM1, caHT: res.caHT))
+                                          tvaDeductible: res.deductible, creditM1: res.creditM1,
+                                          caHT: res.caHT, ligne16: res.ligne16))
             imported += 1
         }
         try? modelContext.save()
@@ -1679,28 +1685,36 @@ struct TvaControlView: View {
                     }
                 }
 
-                // Contrôle des bases : Σ bases déclarées = CA HT (ligne A1)
+                // Contrôle des bases & de la TVA brute : Σ bases = A1, et Σ TVA = ligne 16
                 VStack(alignment: .leading, spacing: 0) {
-                    Text("Contrôle des bases — Σ bases = CA HT déclaré (ligne A1)")
+                    Text("Contrôle des bases — Σ bases = CA HT (A1) · Σ TVA calculées = ligne 16")
                         .font(.headline).padding(.bottom, 6)
                     HStack(spacing: 0) {
                         decCell("Période", w: 80, align: .leading, bold: true)
                         decCell("Σ Bases", w: cw, bold: true)
                         decCell("CA HT (A1)", w: cw, bold: true)
-                        decCell("Écart", w: 90, bold: true)
+                        decCell("Écart", w: 80, bold: true)
+                        decCell("Σ TVA calc.", w: cw, bold: true)
+                        decCell("Ligne 16", w: cw, bold: true)
+                        decCell("Écart", w: 80, bold: true)
                         statutCell(ok: true).hidden().overlay(Text("Statut").font(.callout.bold()))
                     }
                     .background(Color.gray.opacity(0.10))
                     Divider()
                     ForEach(periodes, id: \.self) { p in
                         let a1 = caHTDict[p] ?? 0
-                        let e = sumBase(p) - a1
-                        let ok = abs(e) < 1 && a1 > 0
+                        let eBase = sumBase(p) - a1
+                        let l16 = ligne16Dict[p] ?? 0
+                        let eTva = coll(p) - l16
+                        let ok = abs(eBase) < 1 && a1 > 0 && abs(eTva) < 1 && l16 > 0
                         HStack(spacing: 0) {
                             decCell(p, w: 80, align: .leading)
                             decCell(formatEuro(sumBase(p)), w: cw)
                             decCell(a1 == 0 ? "—" : formatEuro(a1), w: cw, color: .secondary)
-                            decCell(formatEuroSigned(e), w: 90, color: abs(e) < 1 ? .green : .red)
+                            decCell(formatEuroSigned(eBase), w: 80, color: abs(eBase) < 1 ? .green : .red)
+                            decCell(formatEuro(coll(p)), w: cw)
+                            decCell(l16 == 0 ? "—" : formatEuro(l16), w: cw, color: .secondary)
+                            decCell(formatEuroSigned(eTva), w: 80, color: abs(eTva) < 1 ? .green : .red)
                             statutCell(ok: ok)
                         }
                         Divider()
