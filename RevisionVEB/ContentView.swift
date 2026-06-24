@@ -1322,21 +1322,23 @@ struct TvaControlView: View {
         VStack(alignment: .leading, spacing: 0) {
             Picker("", selection: $sub) {
                 Text("Taux").tag(0)
+                Text("Collectée").tag(3)
                 Text("Déclarations").tag(1)
                 Text("Rapprochement").tag(2)
             }
-            .pickerStyle(.segmented).frame(width: 420).padding()
+            .pickerStyle(.segmented).frame(width: 540).padding()
 
             Divider()
 
             if ventes.isEmpty {
                 PlaceholderView(title: "Aucune vente importée",
-                                message: "Importe la balance : les comptes 70x serviront de base au rapprochement TVA.")
+                                message: "Importe la balance : les comptes 70x serviront de base au contrôle TVA.")
             } else {
                 switch sub {
                 case 0: configView
                 case 1: declarationsView
-                default: rapprochementView
+                case 2: rapprochementView
+                default: collecteeView   // 3
                 }
             }
         }
@@ -1395,6 +1397,78 @@ struct TvaControlView: View {
                     .labelsHidden().frame(width: 120)
                 }
                 .padding(.vertical, 2)
+            }
+        }
+    }
+
+    // MARK: Sous-vue Collectée (cohérence CA × taux vs TVA comptabilisée — format Excel)
+
+    private func caHT(forTaux t: String) -> Double {
+        ventes.filter { taux(for: $0) == t }.reduce(0.0) { $0 + (-$1.balanceN) }
+    }
+
+    private var collecteeView: some View {
+        let tvaAccounts = allAccounts
+            .filter { $0.exerciceID == exerciceID && $0.accountNumber.hasPrefix("44571") }
+            .sorted { $0.accountNumber < $1.accountNumber }
+        let totalCA = ventes.reduce(0.0) { $0 + (-$1.balanceN) }
+
+        return List {
+            // Bloc Ventes (CA HT)
+            Section("Ventes — CA HT (classe 70)") {
+                HStack {
+                    Text("Compte").frame(width: 90, alignment: .leading)
+                    Text("Intitulé").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Taux").frame(width: 60, alignment: .leading)
+                    Text("CA HT").frame(width: 130, alignment: .trailing)
+                }
+                .font(.caption).foregroundStyle(.secondary)
+
+                ForEach(ventes) { acc in
+                    HStack {
+                        Text(acc.accountNumber).monospaced().frame(width: 90, alignment: .leading)
+                        Text(acc.accountLabel.isEmpty ? acc.accountCode : acc.accountLabel)
+                            .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(tauxLabel(taux(for: acc))).font(.caption).frame(width: 60, alignment: .leading)
+                        Text(formatEuro(-acc.balanceN)).monospacedDigit().frame(width: 130, alignment: .trailing)
+                    }
+                }
+                HStack {
+                    Text("Total CA HT").fontWeight(.semibold).frame(maxWidth: .infinity, alignment: .leading)
+                    Text(formatEuro(totalCA)).fontWeight(.semibold).monospacedDigit().frame(width: 130, alignment: .trailing)
+                }
+            }
+
+            // Bloc TVA collectée (comptabilisée vs calculée)
+            Section("TVA collectée (comptes 44571) — comptabilisée vs calculée") {
+                HStack {
+                    Text("Compte").frame(width: 90, alignment: .leading)
+                    Text("Intitulé").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Taux").frame(width: 50, alignment: .leading)
+                    Text("Comptabilisée").frame(width: 120, alignment: .trailing)
+                    Text("Calculée").frame(width: 110, alignment: .trailing)
+                    Text("Écart").frame(width: 110, alignment: .trailing)
+                }
+                .font(.caption).foregroundStyle(.secondary)
+
+                ForEach(tvaAccounts) { acc in
+                    let t = TvaHelper.detectTaux(from: acc.accountLabel)
+                    let rate = TvaHelper.rate(t) ?? 0
+                    let compta = -acc.balanceN
+                    let calc = (caHT(forTaux: t) * rate / 100).rounded()
+                    let ecart = compta - calc
+                    let seuil = max(calc * 0.005, 2)
+                    HStack {
+                        Text(acc.accountNumber).monospaced().frame(width: 90, alignment: .leading)
+                        Text(acc.accountLabel.isEmpty ? acc.accountCode : acc.accountLabel)
+                            .lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)
+                        Text(tauxLabel(t)).font(.caption).frame(width: 50, alignment: .leading)
+                        Text(formatEuro(compta)).monospacedDigit().frame(width: 120, alignment: .trailing)
+                        Text(formatEuro(calc)).monospacedDigit().foregroundStyle(.secondary).frame(width: 110, alignment: .trailing)
+                        Text(formatEuroSigned(ecart)).monospacedDigit().frame(width: 110, alignment: .trailing)
+                            .foregroundStyle(abs(ecart) <= seuil ? .green : .red)
+                    }
+                }
             }
         }
     }
