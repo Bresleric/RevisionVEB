@@ -1283,14 +1283,18 @@ enum CA3Import {
                 }
                 // ligne 22 (report) = dernier sous-total si la déclaration mentionne un report
                 report = hasReport ? (subs.last ?? 0) : 0
-                // lignes 19 (immo) et 20 (autres biens) parmi les sous-totaux restants
+                // lignes 19 (immo) et 20 (autres biens). On ne fait confiance qu'à la 19
+                // (présente seulement si immo), et la 20 = déductible achats − 19, de sorte
+                // que L.19 + L.20 reconstitue toujours le déductible. Ligne absente = 0.
                 var achats = subs
                 if hasReport, !achats.isEmpty { achats.removeLast() }
-                if hasL19, achats.count >= 2 {
-                    l19 = achats[0]; l20 = achats[1...].reduce(0, +)
+                let achatsTotal = totalDed - report            // déductible sur achats (fiable)
+                if hasL19, let first = achats.first, first > 0, first <= achatsTotal {
+                    l19 = first
                 } else {
-                    l19 = 0; l20 = achats.reduce(0, +)
+                    l19 = 0
                 }
+                l20 = achatsTotal - l19
             }
         }
         return Result(periode: periode, lines: lines, deductible: totalDed - report, creditM1: report,
