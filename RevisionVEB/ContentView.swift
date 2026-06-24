@@ -1507,8 +1507,11 @@ struct TvaControlView: View {
             return (es.reduce(0) { $0 + $1.base }, es.reduce(0) { $0 + $1.tva })
         }
         func coll(_ p: String) -> Double { rates.reduce(0.0) { $0 + vals(p, $1).taxe } }
+        func net(_ p: String) -> Double { coll(p) - (deductDict[p] ?? 0) }
         let totColl = periodes.reduce(0.0) { $0 + coll($1) }
         let totDed  = periodes.reduce(0.0) { $0 + (deductDict[$1] ?? 0) }
+        let totPayer  = periodes.reduce(0.0) { $0 + max(net($1), 0) }
+        let totCredit = periodes.reduce(0.0) { $0 + max(-net($1), 0) }
         let cw: CGFloat = 100
 
         return VStack(alignment: .leading, spacing: 0) {
@@ -1523,26 +1526,29 @@ struct TvaControlView: View {
                         }
                         decCell("Collectée", w: cw, bold: true)
                         decCell("Déductible", w: cw, bold: true)
-                        decCell("À payer", w: 120, bold: true)
+                        decCell("TVA à payer", w: 115, bold: true)
+                        decCell("Crédit reporté", w: 115, bold: true)
                     }
                     .background(Color.gray.opacity(0.10))
                     Divider()
 
                     // Une ligne par mois
                     ForEach(periodes, id: \.self) { p in
-                        let net = coll(p) - (deductDict[p] ?? 0)
+                        let n = net(p)
+                        let muted = Color(nsColor: .tertiaryLabelColor)
                         HStack(spacing: 0) {
                             decCell(p, w: 80, align: .leading)
                             ForEach(rates, id: \.self) { r in
                                 let c = vals(p, r)
                                 decCell(c.base == 0 ? "—" : formatEuro(c.base), w: cw,
-                                        color: c.base == 0 ? Color(nsColor: .tertiaryLabelColor) : .primary)
+                                        color: c.base == 0 ? muted : .primary)
                                 decCell(c.taxe == 0 ? "—" : formatEuro(c.taxe), w: cw,
-                                        color: c.taxe == 0 ? Color(nsColor: .tertiaryLabelColor) : .secondary)
+                                        color: c.taxe == 0 ? muted : .secondary)
                             }
                             decCell(formatEuro(coll(p)), w: cw)
                             decCell(formatEuro(deductDict[p] ?? 0), w: cw, color: .secondary)
-                            decCell(netLabel(net), w: 120, color: net < -0.5 ? .blue : .primary)
+                            decCell(n > 0.5 ? formatEuro(n) : "—", w: 115, color: n > 0.5 ? .primary : muted)
+                            decCell(n < -0.5 ? formatEuro(-n) : "—", w: 115, color: n < -0.5 ? .blue : muted)
                         }
                         Divider()
                     }
@@ -1556,8 +1562,9 @@ struct TvaControlView: View {
                         }
                         decCell(formatEuro(totColl), w: cw, bold: true)
                         decCell(formatEuro(totDed), w: cw, bold: true)
-                        decCell(netLabel(totColl - totDed), w: 120, bold: true,
-                                color: (totColl - totDed) < -0.5 ? .blue : .primary)
+                        decCell(totPayer > 0.5 ? formatEuro(totPayer) : "—", w: 115, bold: true)
+                        decCell(totCredit > 0.5 ? formatEuro(totCredit) : "—", w: 115, bold: true,
+                                color: totCredit > 0.5 ? .blue : .primary)
                     }
                     .background(Color.gray.opacity(0.10))
                 }
