@@ -1526,20 +1526,19 @@ enum SigCalculator {
                 .reduce(0) { $0 + $1.balanceNMinus1 }
         }
 
-        func sumBalanceNMinus2(for patterns: [String]) -> Double {
-            exerciseAccounts
-                .filter { acc in patterns.contains { acc.accountNumber.hasPrefix($0) } }
-                .reduce(0) { $0 + $1.balanceNMinus2 }
-        }
-
-        // Calcul pour les exercices N, N-1, N-2
+        // Calcul pour les exercices N et N-1
         let (sigN, vars) = calculateSigValues(sumBalanceN)
         let sigNMinus1 = calculateSigValues(sumBalanceNMinus1).0
-        let sigNMinus2 = calculateSigValues(sumBalanceNMinus2).0
+
+        // N-2 = vide pour l'instant (nécessiterait une 3e colonne dans l'import)
+        let sigNMinus2 = SigValues(
+            margeBrute: 0, productionExercice: 0, valeurAjoutee: 0, ebeSig: 0,
+            resultatExploitation: 0, resultatFinancier: 0, resultatExceptionnel: 0, resultatNet: 0
+        )
 
         print("📊 SIG N: Marge=\(sigN.margeBrute), CA=\(vars.caHT), Coûts=\(vars.coutsDirects)")
         print("📊 SIG N-1: Marge=\(sigNMinus1.margeBrute)")
-        print("📊 SIG N-2: Marge=\(sigNMinus2.margeBrute)")
+        print("📊 SIG N-2: Marge=\(sigNMinus2.margeBrute) (données du fichier non importées)")
 
         // Créer ou mettre à jour le SIG
         var sig = SoldesIntermedialres(exerciceID: exerciceID)

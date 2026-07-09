@@ -18,7 +18,6 @@ final class BalanceAccount {
     var credit: Double
     var balanceN: Double
     var balanceNMinus1: Double
-    var balanceNMinus2: Double
     var restaurant: Restaurant
     var exerciceID: UUID
     var sourceFile: String
@@ -33,7 +32,6 @@ final class BalanceAccount {
         credit: Double,
         balanceN: Double,
         balanceNMinus1: Double,
-        balanceNMinus2: Double = 0,
         restaurant: Restaurant = .freddy,
         exerciceID: UUID,
         sourceFile: String,
@@ -47,7 +45,6 @@ final class BalanceAccount {
         self.credit = credit
         self.balanceN = balanceN
         self.balanceNMinus1 = balanceNMinus1
-        self.balanceNMinus2 = balanceNMinus2
         self.restaurant = restaurant
         self.exerciceID = exerciceID
         self.sourceFile = sourceFile
