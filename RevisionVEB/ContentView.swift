@@ -512,6 +512,14 @@ struct CycleBalanceView: View {
     private var totalVariation: Double { accounts.reduce(0) { $0 + ($1.balanceN - $1.balanceNMinus1) } }
 
     var body: some View {
+        if cycle == .soldesIntermedialres {
+            SigView(exerciceID: exerciceID)
+        } else {
+            cycleBalanceContent
+        }
+    }
+
+    private var cycleBalanceContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             // En-tete
             VStack(alignment: .leading, spacing: 8) {
@@ -1366,6 +1374,87 @@ enum Class2Import {
                             debit: amount(c[4]), credit: amount(c[6])))
         }
         return rows
+    }
+}
+
+// MARK: - Soldes Intermédiaires de Gestion (Cycle A)
+
+struct SigView: View {
+    let exerciceID: UUID
+
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allSig: [SoldesIntermedialres]
+
+    @State private var expandedSig: Set<String> = []
+
+    private var sig: SoldesIntermedialres? {
+        allSig.first { $0.exerciceID == exerciceID }
+    }
+
+    private var sigsData: [(libelle: String, montant: Double, details: [(String, Double)])] {
+        guard let sig = sig else { return [] }
+        return [
+            ("Marge brute", sig.margeBrute, [("CA HT", sig.caHT), ("Coûts directs", -sig.coutsDirects)]),
+            ("Production exercice", sig.productionExercice, [("Vendue", sig.productionVendue), ("Stockée", sig.productionStockee), ("Immobilisée", sig.productionImmobilisee)]),
+            ("Valeur ajoutée", sig.valeurAjoutee, [("Consommations ext.", -sig.consommationsExternes)]),
+            ("EBE", sig.ebeSig, [("Frais perso", -sig.fraisPersonnel), ("Impôts & taxes", -sig.impotsEtTaxes)]),
+            ("Résultat exploitation", sig.resultatExploitation, [("Autres produits", sig.autresProduitExploitation), ("Autres charges", -sig.autresChargesExploitation)]),
+            ("Résultat financier", sig.resultatFinancier, [("Prod. financiers", sig.produitsFinanciers), ("Charges fin.", -sig.chargesFinancieres)]),
+            ("Résultat exceptionnel", sig.resultatExceptionnel, [("Prod. except.", sig.produitsExceptionnels), ("Charges except.", -sig.chargesExceptionnels)]),
+            ("Résultat NET", sig.resultatNet, [("Impôt/Bénéfices", -sig.impotSurBenefices)]),
+        ]
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Soldes Intermédiaires de Gestion").font(.headline)
+                Text("Les 8 étapes du compte de résultat — cliquez pour voir les détails.").font(.caption).foregroundStyle(.secondary)
+            }
+            .padding()
+
+            Divider()
+
+            if sig == nil {
+                PlaceholderView(title: "Aucun SIG calculé", message: "Importez une balance comptable pour calculer les soldes.")
+            } else {
+                List {
+                    ForEach(sigsData, id: \.libelle) { item in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text(item.libelle).fontWeight(.semibold).frame(maxWidth: .infinity, alignment: .leading)
+                                Text(formatEuro(item.montant)).fontWeight(.semibold).monospacedDigit()
+                                Button(action: {
+                                    if expandedSig.contains(item.libelle) {
+                                        expandedSig.remove(item.libelle)
+                                    } else {
+                                        expandedSig.insert(item.libelle)
+                                    }
+                                }) {
+                                    Image(systemName: expandedSig.contains(item.libelle) ? "chevron.up" : "chevron.down").foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.vertical, 8)
+
+                            if expandedSig.contains(item.libelle) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Divider()
+                                    ForEach(item.details, id: \.0) { detail in
+                                        HStack {
+                                            Text(detail.0).font(.caption).foregroundStyle(.secondary).padding(.leading, 20)
+                                            Spacer()
+                                            Text(formatEuro(detail.1)).font(.caption).monospacedDigit()
+                                        }
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+        }
     }
 }
 
