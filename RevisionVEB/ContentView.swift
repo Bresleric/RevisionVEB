@@ -1481,27 +1481,30 @@ enum ImmoExcelImport {
                 guard let rowRange = Range(rowMatch.range(at: 1), in: xml) else { continue }
                 let rowContent = String(xml[rowRange])
 
-                var cellValues: [String] = []
-                // Parse all <c>...</c> cells, extract their <v> value, and check t="s" for string lookup
-                let cellPattern = "<c[^>]*(?:t=\"s\")?[^>]*>.*?<v>([^<]+)</v>"
+                // Extract cells: <c r="A1" ...><v>value</v></c>
+                // Sort by column to ensure correct order (A, B, C, ... instead of random order)
+                var cellDict: [(col: String, val: String)] = []
+
+                let cellPattern = "<c r=\"([A-Z]+)\\d+\"[^>]*t=\"([sn])?\"[^>]*>.*?<v>([^<]+)</v>"
                 if let cellRegex = try? NSRegularExpression(pattern: cellPattern, options: [.dotMatchesLineSeparators]) {
                     let cellMatches = cellRegex.matches(in: rowContent, range: NSRange(rowContent.startIndex..., in: rowContent))
                     for cellMatch in cellMatches {
-                        guard let valRange = Range(cellMatch.range(at: 1), in: rowContent) else { continue }
+                        guard let colRange = Range(cellMatch.range(at: 1), in: rowContent),
+                              let typeRange = Range(cellMatch.range(at: 2), in: rowContent),
+                              let valRange = Range(cellMatch.range(at: 3), in: rowContent) else { continue }
+
+                        let col = String(rowContent[colRange])
+                        let cellType = String(rowContent[typeRange])
                         let val = String(rowContent[valRange])
 
-                        // Check if this cell has t="s" (string reference) by examining the cell tag
-                        let cellStartRange = NSRange(location: max(0, cellMatch.range.location - 30), length: min(30, cellMatch.range.location))
-                        let cellStart = (rowContent as NSString).substring(with: cellStartRange)
-                        let isString = cellStart.contains("t=\"s\"")
-
-                        if isString, let idx = Int(val), idx < strings.count {
-                            cellValues.append(strings[idx])
-                        } else {
-                            cellValues.append(val)
-                        }
+                        let cellVal = (cellType == "s") ? (Int(val).flatMap { $0 < strings.count ? strings[$0] : nil } ?? val) : val
+                        cellDict.append((col, cellVal))
                     }
                 }
+
+                // Sort by column name (A, B, C, ...)
+                cellDict.sort { $0.col < $1.col }
+                let cellValues = cellDict.map { $0.val }
 
                 let text = cellValues.joined(separator: " ")
                 if text.contains("Compte") && text.contains(" - ") {
