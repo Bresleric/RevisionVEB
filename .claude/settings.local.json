@@ -16,7 +16,8 @@
       "Bash(git commit -m 'fix\\(cycle A\\): inversion signes classe 7 + affichage N-1 *)",
       "Bash(git commit -m 'feat\\(cycle A\\): affichage comparatif N et N-1 côte à côte *)",
       "Bash(git commit -m 'debug\\(cycle A\\): ajout logs pour identifier problèmes chiffres/N-1 *)",
-      "Bash(git commit -m 'feat\\(cycle A\\): tableau avec colonnes par exercice *)"
+      "Bash(git commit -m 'feat\\(cycle A\\): tableau avec colonnes par exercice *)",
+      "Bash(git commit -m 'feat\\(cycle A\\): affichage N, N-1, N-2 dans tableau comparatif *)"
     ]
   }
 }

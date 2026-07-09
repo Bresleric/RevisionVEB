@@ -1392,17 +1392,17 @@ struct SigView: View {
         allSig.first { $0.exerciceID == exerciceID }
     }
 
-    private var sigsData: [(libelle: String, montantN: Double, montantN1: Double, details: [(String, Double)])] {
+    private var sigsData: [(libelle: String, montantN: Double, montantN1: Double, montantN2: Double, details: [(String, Double)])] {
         guard let sig = sig else { return [] }
         return [
-            ("Marge brute", sig.margeBrute, sig.margeBruteN1, [("CA HT", sig.caHT), ("Coûts directs", -sig.coutsDirects)]),
-            ("Production exercice", sig.productionExercice, sig.productionExerciceN1, [("Vendue", sig.productionVendue), ("Stockée", sig.productionStockee), ("Immobilisée", sig.productionImmobilisee)]),
-            ("Valeur ajoutée", sig.valeurAjoutee, sig.valeurAjouteeN1, [("Consommations ext.", -sig.consommationsExternes)]),
-            ("EBE", sig.ebeSig, sig.ebeSigN1, [("Frais perso", -sig.fraisPersonnel), ("Impôts & taxes", -sig.impotsEtTaxes)]),
-            ("Résultat exploitation", sig.resultatExploitation, sig.resultatExploitationN1, [("Autres produits", sig.autresProduitExploitation), ("Autres charges", -sig.autresChargesExploitation)]),
-            ("Résultat financier", sig.resultatFinancier, sig.resultatFinancierN1, [("Prod. financiers", sig.produitsFinanciers), ("Charges fin.", -sig.chargesFinancieres)]),
-            ("Résultat exceptionnel", sig.resultatExceptionnel, sig.resultatExceptionnelN1, [("Prod. except.", sig.produitsExceptionnels), ("Charges except.", -sig.chargesExceptionnels)]),
-            ("Résultat NET", sig.resultatNet, sig.resultatNetN1, [("Impôt/Bénéfices", -sig.impotSurBenefices)]),
+            ("Marge brute", sig.margeBrute, sig.margeBruteN1, sig.margeBruteN2, [("CA HT", sig.caHT), ("Coûts directs", -sig.coutsDirects)]),
+            ("Production exercice", sig.productionExercice, sig.productionExerciceN1, sig.productionExerciceN2, [("Vendue", sig.productionVendue), ("Stockée", sig.productionStockee), ("Immobilisée", sig.productionImmobilisee)]),
+            ("Valeur ajoutée", sig.valeurAjoutee, sig.valeurAjouteeN1, sig.valeurAjouteeN2, [("Consommations ext.", -sig.consommationsExternes)]),
+            ("EBE", sig.ebeSig, sig.ebeSigN1, sig.ebeSigN2, [("Frais perso", -sig.fraisPersonnel), ("Impôts & taxes", -sig.impotsEtTaxes)]),
+            ("Résultat exploitation", sig.resultatExploitation, sig.resultatExploitationN1, sig.resultatExploitationN2, [("Autres produits", sig.autresProduitExploitation), ("Autres charges", -sig.autresChargesExploitation)]),
+            ("Résultat financier", sig.resultatFinancier, sig.resultatFinancierN1, sig.resultatFinancierN2, [("Prod. financiers", sig.produitsFinanciers), ("Charges fin.", -sig.chargesFinancieres)]),
+            ("Résultat exceptionnel", sig.resultatExceptionnel, sig.resultatExceptionnelN1, sig.resultatExceptionnelN2, [("Prod. except.", sig.produitsExceptionnels), ("Charges except.", -sig.chargesExceptionnels)]),
+            ("Résultat NET", sig.resultatNet, sig.resultatNetN1, sig.resultatNetN2, [("Impôt/Bénéfices", -sig.impotSurBenefices)]),
         ]
     }
 
@@ -1428,6 +1428,8 @@ struct SigView: View {
                             Text("Exercice N").frame(maxWidth: .infinity, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
                             Divider().frame(height: 30)
                             Text("Exercice N-1").frame(maxWidth: .infinity, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
+                            Divider().frame(height: 30)
+                            Text("Exercice N-2").frame(maxWidth: .infinity, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
                         }
                         .padding(.vertical, 8)
                         Divider()
@@ -1441,6 +1443,8 @@ struct SigView: View {
                                     Text(formatEuro(item.montantN)).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
                                     Divider()
                                     Text(formatEuro(item.montantN1)).monospacedDigit().foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
+                                    Divider()
+                                    Text(formatEuro(item.montantN2)).monospacedDigit().foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
                                 }
                                 .frame(height: 30)
 
@@ -1452,6 +1456,8 @@ struct SigView: View {
                                                 Text("  • \(detail.0)").font(.caption).foregroundStyle(.secondary).frame(width: 180, alignment: .leading).padding(.horizontal, 8)
                                                 Divider()
                                                 Text(formatEuro(detail.1)).font(.caption).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
+                                                Divider()
+                                                Text("").frame(maxWidth: .infinity).padding(.horizontal, 8)
                                                 Divider()
                                                 Text("").frame(maxWidth: .infinity).padding(.horizontal, 8)
                                             }
@@ -1520,14 +1526,20 @@ enum SigCalculator {
                 .reduce(0) { $0 + $1.balanceNMinus1 }
         }
 
-        // Calcul pour l'exercice N
-        let (sigN, vars) = calculateSigValues(sumBalanceN)
+        func sumBalanceNMinus2(for patterns: [String]) -> Double {
+            exerciseAccounts
+                .filter { acc in patterns.contains { acc.accountNumber.hasPrefix($0) } }
+                .reduce(0) { $0 + $1.balanceNMinus2 }
+        }
 
-        // Calcul pour l'exercice N-1
+        // Calcul pour les exercices N, N-1, N-2
+        let (sigN, vars) = calculateSigValues(sumBalanceN)
         let sigNMinus1 = calculateSigValues(sumBalanceNMinus1).0
+        let sigNMinus2 = calculateSigValues(sumBalanceNMinus2).0
 
         print("📊 SIG N: Marge=\(sigN.margeBrute), CA=\(vars.caHT), Coûts=\(vars.coutsDirects)")
         print("📊 SIG N-1: Marge=\(sigNMinus1.margeBrute)")
+        print("📊 SIG N-2: Marge=\(sigNMinus2.margeBrute)")
 
         // Créer ou mettre à jour le SIG
         var sig = SoldesIntermedialres(exerciceID: exerciceID)
@@ -1549,6 +1561,15 @@ enum SigCalculator {
         sig.resultatFinancierN1 = sigNMinus1.resultatFinancier
         sig.resultatExceptionnelN1 = sigNMinus1.resultatExceptionnel
         sig.resultatNetN1 = sigNMinus1.resultatNet
+
+        sig.margeBruteN2 = sigNMinus2.margeBrute
+        sig.productionExerciceN2 = sigNMinus2.productionExercice
+        sig.valeurAjouteeN2 = sigNMinus2.valeurAjoutee
+        sig.ebeSigN2 = sigNMinus2.ebeSig
+        sig.resultatExploitationN2 = sigNMinus2.resultatExploitation
+        sig.resultatFinancierN2 = sigNMinus2.resultatFinancier
+        sig.resultatExceptionnelN2 = sigNMinus2.resultatExceptionnel
+        sig.resultatNetN2 = sigNMinus2.resultatNet
 
         sig.caHT = vars.caHT
         sig.coutsDirects = vars.coutsDirects
