@@ -327,6 +327,18 @@ final class ImportManager: ObservableObject {
         modelContext.insert(log)
         try? modelContext.save()
 
+        // Calcul automatique des SIG
+        if success > 0 {
+            do {
+                let descriptor = FetchDescriptor<BalanceAccount>()
+                let accounts = try modelContext.fetch(descriptor).filter { $0.exerciceID == exerciceID }
+                SigCalculator.calculateAndStore(exerciceID: exerciceID, from: accounts, in: modelContext)
+                print("📊 SIG calculés automatiquement: \(accounts.count) comptes")
+            } catch {
+                print("⚠️ Erreur lors du calcul des SIG: \(error)")
+            }
+        }
+
         isImporting = false
         importProgress = 1.0
         print("📊 Balance importee: \(success) comptes (\(skipped) lignes ignorees)")
