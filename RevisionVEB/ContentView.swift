@@ -1392,17 +1392,17 @@ struct SigView: View {
         allSig.first { $0.exerciceID == exerciceID }
     }
 
-    private var sigsData: [(libelle: String, montant: Double, details: [(String, Double)])] {
+    private var sigsData: [(libelle: String, montantN: Double, montantN1: Double, details: [(String, Double)])] {
         guard let sig = sig else { return [] }
         return [
-            ("Marge brute", sig.margeBrute, [("CA HT", sig.caHT), ("Coûts directs", -sig.coutsDirects)]),
-            ("Production exercice", sig.productionExercice, [("Vendue", sig.productionVendue), ("Stockée", sig.productionStockee), ("Immobilisée", sig.productionImmobilisee)]),
-            ("Valeur ajoutée", sig.valeurAjoutee, [("Consommations ext.", -sig.consommationsExternes)]),
-            ("EBE", sig.ebeSig, [("Frais perso", -sig.fraisPersonnel), ("Impôts & taxes", -sig.impotsEtTaxes)]),
-            ("Résultat exploitation", sig.resultatExploitation, [("Autres produits", sig.autresProduitExploitation), ("Autres charges", -sig.autresChargesExploitation)]),
-            ("Résultat financier", sig.resultatFinancier, [("Prod. financiers", sig.produitsFinanciers), ("Charges fin.", -sig.chargesFinancieres)]),
-            ("Résultat exceptionnel", sig.resultatExceptionnel, [("Prod. except.", sig.produitsExceptionnels), ("Charges except.", -sig.chargesExceptionnels)]),
-            ("Résultat NET", sig.resultatNet, [("Impôt/Bénéfices", -sig.impotSurBenefices)]),
+            ("Marge brute", sig.margeBrute, sig.margeBruteN1, [("CA HT", sig.caHT), ("Coûts directs", -sig.coutsDirects)]),
+            ("Production exercice", sig.productionExercice, sig.productionExerciceN1, [("Vendue", sig.productionVendue), ("Stockée", sig.productionStockee), ("Immobilisée", sig.productionImmobilisee)]),
+            ("Valeur ajoutée", sig.valeurAjoutee, sig.valeurAjouteeN1, [("Consommations ext.", -sig.consommationsExternes)]),
+            ("EBE", sig.ebeSig, sig.ebeSigN1, [("Frais perso", -sig.fraisPersonnel), ("Impôts & taxes", -sig.impotsEtTaxes)]),
+            ("Résultat exploitation", sig.resultatExploitation, sig.resultatExploitationN1, [("Autres produits", sig.autresProduitExploitation), ("Autres charges", -sig.autresChargesExploitation)]),
+            ("Résultat financier", sig.resultatFinancier, sig.resultatFinancierN1, [("Prod. financiers", sig.produitsFinanciers), ("Charges fin.", -sig.chargesFinancieres)]),
+            ("Résultat exceptionnel", sig.resultatExceptionnel, sig.resultatExceptionnelN1, [("Prod. except.", sig.produitsExceptionnels), ("Charges except.", -sig.chargesExceptionnels)]),
+            ("Résultat NET", sig.resultatNet, sig.resultatNetN1, [("Impôt/Bénéfices", -sig.impotSurBenefices)]),
         ]
     }
 
@@ -1410,7 +1410,7 @@ struct SigView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Soldes Intermédiaires de Gestion").font(.headline)
-                Text("Les 8 étapes du compte de résultat — cliquez pour voir les détails.").font(.caption).foregroundStyle(.secondary)
+                Text("Les 8 étapes du compte de résultat (N en gras, N-1 en gris) — cliquez pour voir les détails.").font(.caption).foregroundStyle(.secondary)
             }
             .padding()
 
@@ -1424,7 +1424,10 @@ struct SigView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
                                 Text(item.libelle).fontWeight(.semibold).frame(maxWidth: .infinity, alignment: .leading)
-                                Text(formatEuro(item.montant)).fontWeight(.semibold).monospacedDigit()
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text(formatEuro(item.montantN)).fontWeight(.semibold).monospacedDigit().font(.callout)
+                                    Text(formatEuro(item.montantN1)).monospacedDigit().font(.caption).foregroundStyle(.secondary)
+                                }
                                 Button(action: {
                                     if expandedSig.contains(item.libelle) {
                                         expandedSig.remove(item.libelle)
