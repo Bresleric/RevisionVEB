@@ -1384,6 +1384,7 @@ struct SigView: View {
 
     @Environment(\.modelContext) private var modelContext
     @Query private var allSig: [SoldesIntermedialres]
+    @Query(sort: \BalanceAccount.accountNumber) private var allAccounts: [BalanceAccount]
 
     @State private var expandedSig: Set<String> = []
 
@@ -1417,7 +1418,7 @@ struct SigView: View {
 
             if sig == nil {
                 PlaceholderView(title: "Aucun SIG calculé", message: "Importez une balance comptable pour calculer les soldes.")
-            } else {
+            } else if sig != nil {
                 List {
                     ForEach(sigsData, id: \.libelle) { item in
                         VStack(alignment: .leading, spacing: 8) {
@@ -1455,6 +1456,22 @@ struct SigView: View {
                 }
             }
         }
+        .onAppear {
+            calculateSigIfNeeded()
+        }
+    }
+
+    private func calculateSigIfNeeded() {
+        // Si SIG existe déjà, ne rien faire
+        if sig != nil { return }
+
+        // Récupérer les comptes de l'exercice
+        let exerciseAccounts = allAccounts.filter { $0.exerciceID == exerciceID }
+        guard !exerciseAccounts.isEmpty else { return }
+
+        // Calculer automatiquement les SIG
+        SigCalculator.calculateAndStore(exerciceID: exerciceID, from: exerciseAccounts, in: modelContext)
+        print("📊 SIG calculés automatiquement depuis le Cycle A (exerciceID: \(exerciceID))")
     }
 }
 
