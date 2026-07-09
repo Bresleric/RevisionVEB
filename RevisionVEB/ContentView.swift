@@ -1481,49 +1481,60 @@ enum SigCalculator {
     static func calculateAndStore(exerciceID: UUID, from accounts: [BalanceAccount], in modelContext: ModelContext) {
         let exerciseAccounts = accounts.filter { $0.exerciceID == exerciceID }
 
-        // Helper: somme les balances d'un compte
         func sumBalance(for patterns: [String]) -> Double {
             exerciseAccounts
                 .filter { acc in patterns.contains { acc.accountNumber.hasPrefix($0) } }
                 .reduce(0) { $0 + $1.balanceN }
         }
 
-        // Calcul des 8 soldes
-        let caHT = sumBalance(for: ["70", "71"])  // Ventes + Production
-        let coutsDirects = sumBalance(for: ["60", "61", "62"])  // Achats + Charges externes
-        let margeBrute = caHT - coutsDirects
-
+        // 1. Ventes marchandises + Production
+        let caHT = sumBalance(for: ["70"])  // Ventes marchandises/produits
         let productionVendue = sumBalance(for: ["71"])
         let productionStockee = sumBalance(for: ["72"])
         let productionImmobilisee = sumBalance(for: ["73"])
-        let productionExercice = productionVendue + productionStockee + productionImmobilisee
+        let ventesEtProduction = caHT + productionVendue + productionStockee + productionImmobilisee
 
-        let consommationsExternes = sumBalance(for: ["60", "61", "62"])
-        let valeurAjoutee = margeBrute + productionExercice - consommationsExternes
+        // 2. Marge brute de production
+        let coutsDirects = sumBalance(for: ["60"])  // Matières premières, appro consommés
+        let margeBrute = ventesEtProduction - coutsDirects
 
-        let fraisPersonnel = sumBalance(for: ["64"])
+        // 3. Autres achats + charges externes
+        let consommationsExternes = sumBalance(for: ["61", "62"])  // Services externes, autres achats
+        let valeurAjoutee = margeBrute - consommationsExternes
+
+        // 4. EBE (Excédent brut d'exploitation)
+        let subventions = sumBalance(for: ["74"])
         let impotsEtTaxes = sumBalance(for: ["63"])
-        let ebeSig = valeurAjoutee - fraisPersonnel - impotsEtTaxes
+        let fraisPersonnel = sumBalance(for: ["64"])
+        let ebeSig = valeurAjoutee + subventions - impotsEtTaxes - fraisPersonnel
 
+        // 5. Résultat d'exploitation
         let autresProduitExploitation = sumBalance(for: ["75"])
         let autresChargesExploitation = sumBalance(for: ["65"])
-        let resultatExploitation = ebeSig + autresProduitExploitation - autresChargesExploitation
+        let reprises = sumBalance(for: ["78"])
+        let dotations = sumBalance(for: ["68"])
+        let resultatExploitation = ebeSig + autresProduitExploitation - autresChargesExploitation + reprises - dotations
 
+        // 6. Résultat courant (avant résultat exceptionnel)
         let produitsFinanciers = sumBalance(for: ["76"])
         let chargesFinancieres = sumBalance(for: ["66"])
         let resultatFinancier = produitsFinanciers - chargesFinancieres
+        let resultatCourant = resultatExploitation + resultatFinancier
 
+        // 7. Résultat exceptionnel
         let produitsExceptionnels = sumBalance(for: ["77"])
         let chargesExceptionnels = sumBalance(for: ["67"])
         let resultatExceptionnel = produitsExceptionnels - chargesExceptionnels
 
+        // 8. Résultat NET
         let impotSurBenefices = sumBalance(for: ["69"])
-        let resultatNet = resultatExploitation + resultatFinancier + resultatExceptionnel - impotSurBenefices
+        let resultatNet = resultatCourant + resultatExceptionnel - impotSurBenefices
 
         // Créer ou mettre à jour le SIG
         var sig = SoldesIntermedialres(exerciceID: exerciceID)
+
         sig.margeBrute = margeBrute
-        sig.productionExercice = productionExercice
+        sig.productionExercice = productionVendue + productionStockee + productionImmobilisee
         sig.valeurAjoutee = valeurAjoutee
         sig.ebeSig = ebeSig
         sig.resultatExploitation = resultatExploitation
@@ -1531,7 +1542,7 @@ enum SigCalculator {
         sig.resultatExceptionnel = resultatExceptionnel
         sig.resultatNet = resultatNet
 
-        sig.caHT = caHT
+        sig.caHT = ventesEtProduction
         sig.coutsDirects = coutsDirects
         sig.productionVendue = productionVendue
         sig.productionStockee = productionStockee

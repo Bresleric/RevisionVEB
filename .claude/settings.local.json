@@ -10,7 +10,9 @@
       "Bash(git commit -m 'feat\\(cycle A\\): calculateur automatique des SIG depuis balance *)",
       "Bash(git commit -m 'feat\\(cycle A\\): calcul automatique des SIG au import de balance *)",
       "Bash(open /Users/eric/Library/Developer/Xcode/DerivedData/RevisionVEB-glkescnxodmomierqzhipdqybqfe/Build/Products/Debug/RevisionVEB.app)",
-      "Bash(git commit -m 'feat\\(cycle A\\): calcul automatique des SIG au chargement de la vue *)"
+      "Bash(git commit -m 'feat\\(cycle A\\): calcul automatique des SIG au chargement de la vue *)",
+      "Bash(killall RevisionVEB)",
+      "Bash(git commit -m 'fix\\(cycle A\\): formules SIG correctes selon tableau référence *)"
     ]
   }
 }
