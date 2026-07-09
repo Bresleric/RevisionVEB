@@ -12,7 +12,8 @@
       "Bash(open /Users/eric/Library/Developer/Xcode/DerivedData/RevisionVEB-glkescnxodmomierqzhipdqybqfe/Build/Products/Debug/RevisionVEB.app)",
       "Bash(git commit -m 'feat\\(cycle A\\): calcul automatique des SIG au chargement de la vue *)",
       "Bash(killall RevisionVEB)",
-      "Bash(git commit -m 'fix\\(cycle A\\): formules SIG correctes selon tableau référence *)"
+      "Bash(git commit -m 'fix\\(cycle A\\): formules SIG correctes selon tableau référence *)",
+      "Bash(git commit -m 'fix\\(cycle A\\): inversion signes classe 7 + affichage N-1 *)"
     ]
   }
 }

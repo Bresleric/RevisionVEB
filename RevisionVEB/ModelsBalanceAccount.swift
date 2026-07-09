@@ -533,6 +533,16 @@ final class SoldesIntermedialres {
     // Niveau 8 : Résultat net = Résultat exploitation + financier + exceptionnel - IS
     var resultatNet: Double = 0
 
+    // Valeurs N-1 pour comparaison
+    var margeBruteN1: Double = 0
+    var productionExerciceN1: Double = 0
+    var valeurAjouteeN1: Double = 0
+    var ebeSigN1: Double = 0
+    var resultatExploitationN1: Double = 0
+    var resultatFinancierN1: Double = 0
+    var resultatExceptionnelN1: Double = 0
+    var resultatNetN1: Double = 0
+
     // Détails pour chaque niveau (pour affichage déroulable)
     var caHT: Double = 0
     var coutsDirects: Double = 0
