@@ -1475,6 +1475,7 @@ struct SigView: View {
         // Calculer automatiquement les SIG
         SigCalculator.calculateAndStore(exerciceID: exerciceID, from: exerciseAccounts, in: modelContext)
         print("📊 SIG calculés automatiquement depuis le Cycle A (exerciceID: \(exerciceID))")
+        print("📊 Comptes N: \(exerciseAccounts.count), avec N-1 data: \(exerciseAccounts.filter { $0.balanceNMinus1 != 0 }.count)")
     }
 }
 
@@ -1501,6 +1502,9 @@ enum SigCalculator {
 
         // Calcul pour l'exercice N-1
         let sigNMinus1 = calculateSigValues(sumBalanceNMinus1).0
+
+        print("📊 SIG N: Marge=\(sigN.margeBrute), CA=\(vars.caHT), Coûts=\(vars.coutsDirects)")
+        print("📊 SIG N-1: Marge=\(sigNMinus1.margeBrute)")
 
         // Créer ou mettre à jour le SIG
         var sig = SoldesIntermedialres(exerciceID: exerciceID)
