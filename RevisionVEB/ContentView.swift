@@ -1410,7 +1410,7 @@ struct SigView: View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Soldes Intermédiaires de Gestion").font(.headline)
-                Text("Les 8 étapes du compte de résultat (N en gras, N-1 en gris) — cliquez pour voir les détails.").font(.caption).foregroundStyle(.secondary)
+                Text("Tableau comparatif par exercice — cliquez pour voir les détails de chaque solde.").font(.caption).foregroundStyle(.secondary)
             }
             .padding()
 
@@ -1419,43 +1419,66 @@ struct SigView: View {
             if sig == nil {
                 PlaceholderView(title: "Aucun SIG calculé", message: "Importez une balance comptable pour calculer les soldes.")
             } else if sig != nil {
-                List {
-                    ForEach(sigsData, id: \.libelle) { item in
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack {
-                                Text(item.libelle).fontWeight(.semibold).frame(maxWidth: .infinity, alignment: .leading)
-                                VStack(alignment: .trailing, spacing: 2) {
-                                    Text(formatEuro(item.montantN)).fontWeight(.semibold).monospacedDigit().font(.callout)
-                                    Text(formatEuro(item.montantN1)).monospacedDigit().font(.caption).foregroundStyle(.secondary)
-                                }
-                                Button(action: {
-                                    if expandedSig.contains(item.libelle) {
-                                        expandedSig.remove(item.libelle)
-                                    } else {
-                                        expandedSig.insert(item.libelle)
-                                    }
-                                }) {
-                                    Image(systemName: expandedSig.contains(item.libelle) ? "chevron.up" : "chevron.down").foregroundStyle(.secondary)
-                                }
-                            }
-                            .padding(.vertical, 8)
+                ScrollView([.horizontal, .vertical]) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        // En-tête avec les exercices
+                        HStack(spacing: 0) {
+                            Text("").frame(width: 180, alignment: .leading).padding(.horizontal, 8)
+                            Divider().frame(height: 30)
+                            Text("Exercice N").frame(maxWidth: .infinity, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
+                            Divider().frame(height: 30)
+                            Text("Exercice N-1").frame(maxWidth: .infinity, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
+                        }
+                        .padding(.vertical, 8)
+                        Divider()
 
-                            if expandedSig.contains(item.libelle) {
-                                VStack(alignment: .leading, spacing: 4) {
+                        // Lignes des SIG
+                        ForEach(sigsData, id: \.libelle) { item in
+                            VStack(alignment: .leading, spacing: 0) {
+                                HStack(spacing: 0) {
+                                    Text(item.libelle).fontWeight(.semibold).frame(width: 180, alignment: .leading).padding(.horizontal, 8)
                                     Divider()
-                                    ForEach(item.details, id: \.0) { detail in
-                                        HStack {
-                                            Text(detail.0).font(.caption).foregroundStyle(.secondary).padding(.leading, 20)
-                                            Spacer()
-                                            Text(formatEuro(detail.1)).font(.caption).monospacedDigit()
+                                    Text(formatEuro(item.montantN)).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
+                                    Divider()
+                                    Text(formatEuro(item.montantN1)).monospacedDigit().foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
+                                }
+                                .frame(height: 30)
+
+                                if expandedSig.contains(item.libelle) {
+                                    Divider().padding(.vertical, 4)
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        ForEach(item.details, id: \.0) { detail in
+                                            HStack(spacing: 0) {
+                                                Text("  • \(detail.0)").font(.caption).foregroundStyle(.secondary).frame(width: 180, alignment: .leading).padding(.horizontal, 8)
+                                                Divider()
+                                                Text(formatEuro(detail.1)).font(.caption).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
+                                                Divider()
+                                                Text("").frame(maxWidth: .infinity).padding(.horizontal, 8)
+                                            }
+                                            .frame(height: 24)
                                         }
                                     }
+                                    .padding(.vertical, 4)
                                 }
-                                .padding(.vertical, 4)
+
+                                HStack(spacing: 0) {
+                                    Button(action: {
+                                        if expandedSig.contains(item.libelle) {
+                                            expandedSig.remove(item.libelle)
+                                        } else {
+                                            expandedSig.insert(item.libelle)
+                                        }
+                                    }) {
+                                        Image(systemName: expandedSig.contains(item.libelle) ? "chevron.up" : "chevron.down")
+                                            .foregroundStyle(.secondary).frame(width: 24)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
                             }
+                            Divider()
                         }
-                        .padding(.vertical, 2)
                     }
+                    .font(.callout)
                 }
             }
         }
