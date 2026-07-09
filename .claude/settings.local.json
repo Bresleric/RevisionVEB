@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add *)",
+      "Bash(git commit -m 'feat\\(cycle A\\): modèle SoldesIntermedialres et intégration enum RevisionCycle *)"
+    ]
+  }
+}

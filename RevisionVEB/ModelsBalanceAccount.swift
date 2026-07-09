@@ -141,6 +141,7 @@ final class Exercice {
 /// Les cycles de revision comptable. Chaque compte est range dans un cycle
 /// selon sa classe (prefixe du numero de compte), selon le Plan Comptable General.
 enum RevisionCycle: String, Codable, CaseIterable, Identifiable {
+    case soldesIntermedialres = "A - Soldes Intermédiaires de Gestion"
     case tresorerie      = "B - Trésorerie et financements"
     case clients         = "C - Clients / Ventes"
     case regularisation  = "D - Régularisation et cut-off"
@@ -168,6 +169,7 @@ enum RevisionCycle: String, Codable, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .soldesIntermedialres: return "chart.bar"
         case .tresorerie:      return "banknote"
         case .clients:         return "person.crop.circle.badge.checkmark"
         case .regularisation:  return "calendar.badge.clock"
@@ -501,6 +503,60 @@ final class ImmoInvoice {
     var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
 }
 
+/// Soldes Intermédiaires de Gestion (SIG) - 8 étapes du compte de résultat.
+@Model
+final class SoldesIntermedialres {
+    var id: UUID = UUID()
+    var exerciceID: UUID = UUID()
+
+    // Niveau 1 : Marge brute = CA HT - Coûts directs
+    var margeBrute: Double = 0
+
+    // Niveau 2 : Production de l'exercice = Production vendue + stockée + immobilisée
+    var productionExercice: Double = 0
+
+    // Niveau 3 : Valeur ajoutée = Marge brute + Production - Consommations externes
+    var valeurAjoutee: Double = 0
+
+    // Niveau 4 : EBE = VA - Frais perso - Impôts taxes
+    var ebeSig: Double = 0
+
+    // Niveau 5 : Résultat d'exploitation = EBE + Autres produits/charges d'exploitation
+    var resultatExploitation: Double = 0
+
+    // Niveau 6 : Résultat financier = Produits financiers - Charges financières
+    var resultatFinancier: Double = 0
+
+    // Niveau 7 : Résultat exceptionnel = Produits exceptionnels - Charges
+    var resultatExceptionnel: Double = 0
+
+    // Niveau 8 : Résultat net = Résultat exploitation + financier + exceptionnel - IS
+    var resultatNet: Double = 0
+
+    // Détails pour chaque niveau (pour affichage déroulable)
+    var caHT: Double = 0
+    var coutsDirects: Double = 0
+    var productionVendue: Double = 0
+    var productionStockee: Double = 0
+    var productionImmobilisee: Double = 0
+    var consommationsExternes: Double = 0
+    var fraisPersonnel: Double = 0
+    var impotsEtTaxes: Double = 0
+    var autresProduitExploitation: Double = 0
+    var autresChargesExploitation: Double = 0
+    var produitsFinanciers: Double = 0
+    var chargesFinancieres: Double = 0
+    var produitsExceptionnels: Double = 0
+    var chargesExceptionnels: Double = 0
+    var impotSurBenefices: Double = 0
+
+    var updatedAt: Date = Date()
+
+    init(exerciceID: UUID) {
+        self.exerciceID = exerciceID
+    }
+}
+
 /// Bien immobilisé (état d'amortissement depuis le fichier Excel), par exercice et compte.
 @Model
 final class ImmoAsset {
@@ -618,6 +674,11 @@ enum RevisionControls {
     static func groups(for cycle: RevisionCycle) -> [ControlGroup] {
         let L = cycle.letter
         switch cycle {
+        case .soldesIntermedialres:
+            return [
+                grp(L, 0, "Synthèse", ["Marge brute", "Valeur ajoutée", "EBE", "Résultat d'exploitation", "Résultat net"]),
+                grp(L, 1, "Validations", ["Cohérence marge brute vs CA", "Cohérence EBE vs VA et frais", "Résultat net vs IS", "Rapprochement avec le compte de résultat"]),
+            ]
         case .tresorerie:
             return [
                 grp(L, 0, "Trésorerie", ["Rapprochements bancaires", "Contrôle des chèques en circulation",

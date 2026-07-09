@@ -32,6 +32,7 @@ struct RevisionVEBApp: App {
             ImmoInvoice.self,
             Class2Movement.self,
             ImmoAsset.self,
+            SoldesIntermedialres.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
