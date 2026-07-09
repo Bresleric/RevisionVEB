@@ -6,7 +6,8 @@
       "Bash(xcodebuild clean *)",
       "Bash(git checkout *)",
       "Bash(git commit -m 'chore: mise à jour permissions locales pour builds et checkouts *)",
-      "Bash(git commit -m 'feat\\(cycle A\\): vue SigView et intégration au navigation *)"
+      "Bash(git commit -m 'feat\\(cycle A\\): vue SigView et intégration au navigation *)",
+      "Bash(git commit -m 'feat\\(cycle A\\): calculateur automatique des SIG depuis balance *)"
     ]
   }
 }

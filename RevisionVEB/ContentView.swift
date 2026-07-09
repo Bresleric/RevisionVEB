@@ -1458,6 +1458,87 @@ struct SigView: View {
     }
 }
 
+// MARK: - Calcul automatique des SIG
+
+enum SigCalculator {
+    static func calculateAndStore(exerciceID: UUID, from accounts: [BalanceAccount], in modelContext: ModelContext) {
+        let exerciseAccounts = accounts.filter { $0.exerciceID == exerciceID }
+
+        // Helper: somme les balances d'un compte
+        func sumBalance(for patterns: [String]) -> Double {
+            exerciseAccounts
+                .filter { acc in patterns.contains { acc.accountNumber.hasPrefix($0) } }
+                .reduce(0) { $0 + $1.balanceN }
+        }
+
+        // Calcul des 8 soldes
+        let caHT = sumBalance(for: ["70", "71"])  // Ventes + Production
+        let coutsDirects = sumBalance(for: ["60", "61", "62"])  // Achats + Charges externes
+        let margeBrute = caHT - coutsDirects
+
+        let productionVendue = sumBalance(for: ["71"])
+        let productionStockee = sumBalance(for: ["72"])
+        let productionImmobilisee = sumBalance(for: ["73"])
+        let productionExercice = productionVendue + productionStockee + productionImmobilisee
+
+        let consommationsExternes = sumBalance(for: ["60", "61", "62"])
+        let valeurAjoutee = margeBrute + productionExercice - consommationsExternes
+
+        let fraisPersonnel = sumBalance(for: ["64"])
+        let impotsEtTaxes = sumBalance(for: ["63"])
+        let ebeSig = valeurAjoutee - fraisPersonnel - impotsEtTaxes
+
+        let autresProduitExploitation = sumBalance(for: ["75"])
+        let autresChargesExploitation = sumBalance(for: ["65"])
+        let resultatExploitation = ebeSig + autresProduitExploitation - autresChargesExploitation
+
+        let produitsFinanciers = sumBalance(for: ["76"])
+        let chargesFinancieres = sumBalance(for: ["66"])
+        let resultatFinancier = produitsFinanciers - chargesFinancieres
+
+        let produitsExceptionnels = sumBalance(for: ["77"])
+        let chargesExceptionnels = sumBalance(for: ["67"])
+        let resultatExceptionnel = produitsExceptionnels - chargesExceptionnels
+
+        let impotSurBenefices = sumBalance(for: ["69"])
+        let resultatNet = resultatExploitation + resultatFinancier + resultatExceptionnel - impotSurBenefices
+
+        // Créer ou mettre à jour le SIG
+        var sig = SoldesIntermedialres(exerciceID: exerciceID)
+        sig.margeBrute = margeBrute
+        sig.productionExercice = productionExercice
+        sig.valeurAjoutee = valeurAjoutee
+        sig.ebeSig = ebeSig
+        sig.resultatExploitation = resultatExploitation
+        sig.resultatFinancier = resultatFinancier
+        sig.resultatExceptionnel = resultatExceptionnel
+        sig.resultatNet = resultatNet
+
+        sig.caHT = caHT
+        sig.coutsDirects = coutsDirects
+        sig.productionVendue = productionVendue
+        sig.productionStockee = productionStockee
+        sig.productionImmobilisee = productionImmobilisee
+        sig.consommationsExternes = consommationsExternes
+        sig.fraisPersonnel = fraisPersonnel
+        sig.impotsEtTaxes = impotsEtTaxes
+        sig.autresProduitExploitation = autresProduitExploitation
+        sig.autresChargesExploitation = autresChargesExploitation
+        sig.produitsFinanciers = produitsFinanciers
+        sig.chargesFinancieres = chargesFinancieres
+        sig.produitsExceptionnels = produitsExceptionnels
+        sig.chargesExceptionnels = chargesExceptionnels
+        sig.impotSurBenefices = impotSurBenefices
+
+        // Supprimer l'ancien SIG s'il existe et insérer le nouveau
+        if let existing = try? modelContext.fetch(FetchDescriptor<SoldesIntermedialres>()).first(where: { $0.exerciceID == exerciceID }) {
+            modelContext.delete(existing)
+        }
+        modelContext.insert(sig)
+        try? modelContext.save()
+    }
+}
+
 // MARK: - Importateur Excel Immobilisations
 
 enum ImmoExcelImport {
