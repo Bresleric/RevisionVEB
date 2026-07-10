@@ -1449,13 +1449,13 @@ struct SigView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         // En-tête avec les exercices
                         HStack(spacing: 0) {
-                            Text("").frame(width: 180, alignment: .leading).padding(.horizontal, 8)
+                            Text("").frame(width: 240, alignment: .leading).padding(.horizontal, 8)
                             Divider().frame(height: 30)
-                            Text("Exercice N").frame(maxWidth: .infinity, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
+                            Text("Exercice N").frame(minWidth: 130, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
                             Divider().frame(height: 30)
-                            Text("Exercice N-1").frame(maxWidth: .infinity, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
+                            Text("Exercice N-1").frame(minWidth: 130, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
                             Divider().frame(height: 30)
-                            Text("Exercice N-2").frame(maxWidth: .infinity, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
+                            Text("Exercice N-2").frame(minWidth: 130, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
                         }
                         .padding(.vertical, 8)
                         Divider()
@@ -1465,19 +1465,19 @@ struct SigView: View {
                             HStack(spacing: 0) {
                                 Text(item.libelle)
                                     .fontWeight(item.isTotal ? .semibold : .regular)
-                                    .frame(width: 220, alignment: .leading).padding(.horizontal, 8)
+                                    .frame(width: 240, alignment: .leading).padding(.horizontal, 8)
                                 Divider()
                                 Text(formatEuro(item.montantN))
                                     .monospacedDigit()
-                                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
+                                    .frame(minWidth: 130, alignment: .trailing).padding(.horizontal, 8)
                                 Divider()
                                 Text(formatEuro(item.montantN1))
                                     .monospacedDigit().foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
+                                    .frame(minWidth: 130, alignment: .trailing).padding(.horizontal, 8)
                                 Divider()
                                 Text(formatEuro(item.montantN2))
                                     .monospacedDigit().foregroundStyle(.secondary)
-                                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
+                                    .frame(minWidth: 130, alignment: .trailing).padding(.horizontal, 8)
                             }
                             .frame(height: 28)
                             .background(
