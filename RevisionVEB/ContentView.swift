@@ -1596,7 +1596,8 @@ enum SigCalculator {
     private static func calculateSigValues(_ sumBalance: ([String]) -> Double) -> (sig: SigValues, vars: VarsValues) {
         // ÉTAPE 1 : MARGE BRUTE = Ventes - Matières premières
         let ventes = -sumBalance(["70"])  // Classe 7 = créditeur, inverser signe
-        let matieres = sumBalance(["601", "602", "603", "607", "608", "609"])  // Exactement comme le prompt PLANB
+        // Les patterns du prompt incluent les "autres achats" (606) - séparation explicite requise
+        let matieres = sumBalance(["601", "602", "603", "607", "608", "609"])
         let margeBrute = ventes - matieres
 
         // ÉTAPE 2 : VALEUR AJOUTÉE = Marge brute - Autres achats - Services externes - Autres services
