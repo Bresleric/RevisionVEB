@@ -1637,6 +1637,7 @@ enum SigCalculator {
         let chargesFinancieres = sumBalance(["661", "662", "663", "664", "665"])
         let resultatFinancier = -chargesFinancieres
         let resultatCourant = resultatExploitation + resultatFinancier
+        print("🔍 ÉTAPE 5: Rés.Expl=\(resultatExploitation), Charges Fin=\(chargesFinancieres), Rés.Fin=\(resultatFinancier), Rés.Courant=\(resultatCourant)")
 
         // ÉTAPE 6 : RÉSULTAT EXCEPTIONNEL = Produits exceptionnels - Charges exceptionnelles
         let produitsExceptionnels = -sumBalance(["771", "772", "773", "774", "775", "776", "777", "778"])
