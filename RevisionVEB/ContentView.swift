@@ -1513,22 +1513,10 @@ struct SigView: View {
 enum SigCalculator {
     static func calculateAndStore(exerciceID: UUID, from accounts: [BalanceAccount], in modelContext: ModelContext) {
         let exerciseAccounts = accounts.filter { $0.exerciceID == exerciceID }
-        print("📊 SigCalculator: \(exerciseAccounts.count) comptes pour cet exercice")
-
-        // Afficher quelques comptes pour debug
-        let classe60 = exerciseAccounts.filter { $0.accountNumber.hasPrefix("60") }
-        let classe601 = exerciseAccounts.filter { $0.accountNumber.hasPrefix("601") }
-        let classe606 = exerciseAccounts.filter { $0.accountNumber.hasPrefix("606") }
-        print("  Classe 60: \(classe60.count) comptes, somme=\(classe60.reduce(0) { $0 + $1.balanceN })")
-        print("  Classe 601: \(classe601.count) comptes, somme=\(classe601.reduce(0) { $0 + $1.balanceN })")
-        print("  Classe 606: \(classe606.count) comptes, somme=\(classe606.reduce(0) { $0 + $1.balanceN })")
-
         func sumBalanceN(for patterns: [String]) -> Double {
-            let matching = exerciseAccounts
+            exerciseAccounts
                 .filter { acc in patterns.contains { acc.accountNumber.hasPrefix($0) } }
-            let sum = matching.reduce(0) { $0 + $1.balanceN }
-            print("  sumBalanceN(\(patterns)) = \(sum) [\(matching.count) comptes]")
-            return sum
+                .reduce(0) { $0 + $1.balanceN }
         }
 
         func sumBalanceNMinus1(for patterns: [String]) -> Double {
@@ -1608,8 +1596,7 @@ enum SigCalculator {
     private static func calculateSigValues(_ sumBalance: ([String]) -> Double) -> (sig: SigValues, vars: VarsValues) {
         // ÉTAPE 1 : MARGE BRUTE = Ventes - Matières premières
         let ventes = -sumBalance(["70"])  // Classe 7 = créditeur, inverser signe
-        // Test: Chercher TOUS les comptes 60x sauf 606
-        let matieres = sumBalance(["601", "602", "603", "604", "605", "607", "608", "609", "60"])  // Tout sauf 606
+        let matieres = sumBalance(["601", "602", "603", "607", "608", "609"])  // Exactement comme le prompt PLANB
         let margeBrute = ventes - matieres
 
         // ÉTAPE 2 : VALEUR AJOUTÉE = Marge brute - Autres achats - Services externes - Autres services

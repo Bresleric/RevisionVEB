@@ -29,7 +29,8 @@
       "Bash(git commit -m 'feat\\(cycle A\\): implémentation 7 étapes SIG mode opératoire PLANB exact *)",
       "Bash(log stream *)",
       "Bash(/Users/eric/Library/Developer/Xcode/DerivedData/RevisionVEB-glkescnxodmomierqzhipdqybqfe/Build/Products/Debug/RevisionVEB.app/Contents/MacOS/RevisionVEB)",
-      "Bash(git commit -m 'debug\\(cycle A\\): investigation des écarts SIG - patterns de comptes *)"
+      "Bash(git commit -m 'debug\\(cycle A\\): investigation des écarts SIG - patterns de comptes *)",
+      "Bash(git commit -m 'fix\\(cycle A\\): revert aux patterns EXACTS du prompt PLANB SARL *)"
     ]
   }
 }
