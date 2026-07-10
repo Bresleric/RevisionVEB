@@ -524,13 +524,16 @@ final class SoldesIntermedialres {
     // Niveau 5 : Résultat d'exploitation = EBE + Autres produits/charges d'exploitation
     var resultatExploitation: Double = 0
 
-    // Niveau 6 : Résultat financier = Produits financiers - Charges financières
+    // Niveau 5b : Résultat financier = Produits financiers - Charges financières
     var resultatFinancier: Double = 0
 
-    // Niveau 7 : Résultat exceptionnel = Produits exceptionnels - Charges
+    // Niveau 5c : Résultat courant = Résultat exploitation + Résultat financier
+    var resultatCourant: Double = 0
+
+    // Niveau 6 : Résultat exceptionnel = Produits exceptionnels - Charges
     var resultatExceptionnel: Double = 0
 
-    // Niveau 8 : Résultat net = Résultat exploitation + financier + exceptionnel - IS
+    // Niveau 7 : Résultat net = Résultat courant + Résultat exceptionnel
     var resultatNet: Double = 0
 
     // Valeurs N-1 pour comparaison
@@ -540,6 +543,7 @@ final class SoldesIntermedialres {
     var ebeSigN1: Double = 0
     var resultatExploitationN1: Double = 0
     var resultatFinancierN1: Double = 0
+    var resultatCourantN1: Double = 0
     var resultatExceptionnelN1: Double = 0
     var resultatNetN1: Double = 0
 
@@ -550,24 +554,30 @@ final class SoldesIntermedialres {
     var ebeSigN2: Double = 0
     var resultatExploitationN2: Double = 0
     var resultatFinancierN2: Double = 0
+    var resultatCourantN2: Double = 0
     var resultatExceptionnelN2: Double = 0
     var resultatNetN2: Double = 0
 
-    // Détails pour chaque niveau (pour affichage déroulable)
+    // Détails pour chaque niveau (pour affichage complet)
     var caHT: Double = 0
     var coutsDirects: Double = 0
+    var autresAchats: Double = 0           // 606
+    var servicesExternes: Double = 0       // 61x
+    var autresServices: Double = 0         // 62x
     var productionVendue: Double = 0
     var productionStockee: Double = 0
     var productionImmobilisee: Double = 0
-    var consommationsExternes: Double = 0
-    var fraisPersonnel: Double = 0
+    var consommationsExternes: Double = 0  // Total = autresAchats + servicesExternes + autresServices
     var impotsEtTaxes: Double = 0
-    var autresProduitExploitation: Double = 0
+    var fraisPersonnel: Double = 0
     var autresChargesExploitation: Double = 0
+    var produitsDivers: Double = 0         // 75x
+    var dotations: Double = 0              // 68x
+    var reprises: Double = 0               // 79x
     var produitsFinanciers: Double = 0
     var chargesFinancieres: Double = 0
-    var produitsExceptionnels: Double = 0
-    var chargesExceptionnels: Double = 0
+    var produitsExceptionnels: Double = 0  // 77x
+    var chargesExceptionnels: Double = 0   // 67x
     var impotSurBenefices: Double = 0
 
     var updatedAt: Date = Date()

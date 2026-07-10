@@ -1392,17 +1392,43 @@ struct SigView: View {
         allSig.first { $0.exerciceID == exerciceID }
     }
 
-    private var sigsData: [(libelle: String, montantN: Double, montantN1: Double, montantN2: Double, details: [(String, Double)])] {
+    private var sigsData: [(libelle: String, montantN: Double, montantN1: Double, montantN2: Double, isTotal: Bool, bgColor: String?)] {
         guard let sig = sig else { return [] }
         return [
-            ("Marge brute", sig.margeBrute, sig.margeBruteN1, sig.margeBruteN2, [("CA HT", sig.caHT), ("Coûts directs", -sig.coutsDirects)]),
-            ("Production exercice", sig.productionExercice, sig.productionExerciceN1, sig.productionExerciceN2, [("Vendue", sig.productionVendue), ("Stockée", sig.productionStockee), ("Immobilisée", sig.productionImmobilisee)]),
-            ("Valeur ajoutée", sig.valeurAjoutee, sig.valeurAjouteeN1, sig.valeurAjouteeN2, [("Consommations ext.", -sig.consommationsExternes)]),
-            ("EBE", sig.ebeSig, sig.ebeSigN1, sig.ebeSigN2, [("Frais perso", -sig.fraisPersonnel), ("Impôts & taxes", -sig.impotsEtTaxes)]),
-            ("Résultat exploitation", sig.resultatExploitation, sig.resultatExploitationN1, sig.resultatExploitationN2, [("Autres produits", sig.autresProduitExploitation), ("Autres charges", -sig.autresChargesExploitation)]),
-            ("Résultat financier", sig.resultatFinancier, sig.resultatFinancierN1, sig.resultatFinancierN2, [("Prod. financiers", sig.produitsFinanciers), ("Charges fin.", -sig.chargesFinancieres)]),
-            ("Résultat exceptionnel", sig.resultatExceptionnel, sig.resultatExceptionnelN1, sig.resultatExceptionnelN2, [("Prod. except.", sig.produitsExceptionnels), ("Charges except.", -sig.chargesExceptionnels)]),
-            ("Résultat NET", sig.resultatNet, sig.resultatNetN1, sig.resultatNetN2, [("Impôt/Bénéfices", -sig.impotSurBenefices)]),
+            // ÉTAPE 1 : MARGE BRUTE
+            ("Ventes", sig.caHT, sig.caHT, 0, false, nil),
+            ("– Matières premières", sig.coutsDirects, sig.coutsDirects, 0, false, nil),
+            ("= Marge brute", sig.margeBrute, sig.margeBruteN1, sig.margeBruteN2, true, nil),
+
+            // ÉTAPE 2 : VALEUR AJOUTÉE
+            ("– Autres achats (606)", sig.autresAchats, sig.autresAchats, 0, false, nil),
+            ("– Services externes", sig.servicesExternes, sig.servicesExternes, 0, false, nil),
+            ("– Autres services", sig.autresServices, sig.autresServices, 0, false, nil),
+            ("= Valeur ajoutée", sig.valeurAjoutee, sig.valeurAjouteeN1, sig.valeurAjouteeN2, true, nil),
+
+            // ÉTAPE 3 : EBE
+            ("– Impôts/taxes", sig.impotsEtTaxes, sig.impotsEtTaxes, 0, false, nil),
+            ("– Salaires", sig.fraisPersonnel, sig.fraisPersonnel, 0, false, nil),
+            ("– Autres charges", sig.autresChargesExploitation, sig.autresChargesExploitation, 0, false, nil),
+            ("= EBE", sig.ebeSig, sig.ebeSigN1, sig.ebeSigN2, true, "yellow"),
+
+            // ÉTAPE 4 : RÉSULTAT EXPLOITATION
+            ("+ Produits divers", sig.produitsDivers, sig.produitsDivers, 0, false, nil),
+            ("– Dotations amort.", sig.dotations, sig.dotations, 0, false, nil),
+            ("+ Reprises amort./prov.", sig.reprises, sig.reprises, 0, false, nil),
+            ("= Résultat d'exploitation", sig.resultatExploitation, sig.resultatExploitationN1, sig.resultatExploitationN2, true, nil),
+
+            // ÉTAPE 5 : RÉSULTAT COURANT
+            ("– Charges financières", sig.chargesFinancieres, sig.chargesFinancieres, 0, false, nil),
+            ("= Résultat courant", sig.resultatCourant, sig.resultatCourantN1, sig.resultatCourantN2, true, nil),
+
+            // ÉTAPE 6 : RÉSULTAT EXCEPTIONNEL
+            ("+ Produits exceptionnels", sig.produitsExceptionnels, sig.produitsExceptionnels, 0, false, nil),
+            ("– Charges exceptionnelles", sig.chargesExceptionnels, sig.chargesExceptionnels, 0, false, nil),
+            ("= Résultat exceptionnel", sig.resultatExceptionnel, sig.resultatExceptionnelN1, sig.resultatExceptionnelN2, true, nil),
+
+            // ÉTAPE 7 : RÉSULTAT NET
+            ("= RÉSULTAT NET", sig.resultatNet, sig.resultatNetN1, sig.resultatNetN2, true, "green"),
         ]
     }
 
@@ -1434,53 +1460,32 @@ struct SigView: View {
                         .padding(.vertical, 8)
                         Divider()
 
-                        // Lignes des SIG
-                        ForEach(sigsData, id: \.libelle) { item in
-                            VStack(alignment: .leading, spacing: 0) {
-                                HStack(spacing: 0) {
-                                    Text(item.libelle).fontWeight(.semibold).frame(width: 180, alignment: .leading).padding(.horizontal, 8)
-                                    Divider()
-                                    Text(formatEuro(item.montantN)).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
-                                    Divider()
-                                    Text(formatEuro(item.montantN1)).monospacedDigit().foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
-                                    Divider()
-                                    Text(formatEuro(item.montantN2)).monospacedDigit().foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
-                                }
-                                .frame(height: 30)
-
-                                if expandedSig.contains(item.libelle) {
-                                    Divider().padding(.vertical, 4)
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        ForEach(item.details, id: \.0) { detail in
-                                            HStack(spacing: 0) {
-                                                Text("  • \(detail.0)").font(.caption).foregroundStyle(.secondary).frame(width: 180, alignment: .leading).padding(.horizontal, 8)
-                                                Divider()
-                                                Text(formatEuro(detail.1)).font(.caption).monospacedDigit().frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
-                                                Divider()
-                                                Text("").frame(maxWidth: .infinity).padding(.horizontal, 8)
-                                                Divider()
-                                                Text("").frame(maxWidth: .infinity).padding(.horizontal, 8)
-                                            }
-                                            .frame(height: 24)
-                                        }
-                                    }
-                                    .padding(.vertical, 4)
-                                }
-
-                                HStack(spacing: 0) {
-                                    Button(action: {
-                                        if expandedSig.contains(item.libelle) {
-                                            expandedSig.remove(item.libelle)
-                                        } else {
-                                            expandedSig.insert(item.libelle)
-                                        }
-                                    }) {
-                                        Image(systemName: expandedSig.contains(item.libelle) ? "chevron.up" : "chevron.down")
-                                            .foregroundStyle(.secondary).frame(width: 24)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
+                        // Lignes des SIG - 21 lignes complètes
+                        ForEach(Array(sigsData.enumerated()), id: \.element.libelle) { idx, item in
+                            HStack(spacing: 0) {
+                                Text(item.libelle)
+                                    .fontWeight(item.isTotal ? .semibold : .regular)
+                                    .frame(width: 220, alignment: .leading).padding(.horizontal, 8)
+                                Divider()
+                                Text(formatEuro(item.montantN))
+                                    .monospacedDigit()
+                                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
+                                Divider()
+                                Text(formatEuro(item.montantN1))
+                                    .monospacedDigit().foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
+                                Divider()
+                                Text(formatEuro(item.montantN2))
+                                    .monospacedDigit().foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .trailing).padding(.horizontal, 8)
                             }
+                            .frame(height: 28)
+                            .background(
+                                item.bgColor == "yellow" ? Color.yellow.opacity(0.3) :
+                                item.bgColor == "green" ? Color.green.opacity(0.2) :
+                                item.isTotal ? Color.gray.opacity(0.1) :
+                                Color.clear
+                            )
                             Divider()
                         }
                     }
@@ -1532,7 +1537,7 @@ enum SigCalculator {
         // N-2 = vide pour l'instant (nécessiterait une 3e colonne dans l'import)
         let sigNMinus2 = SigValues(
             margeBrute: 0, productionExercice: 0, valeurAjoutee: 0, ebeSig: 0,
-            resultatExploitation: 0, resultatFinancier: 0, resultatExceptionnel: 0, resultatNet: 0
+            resultatExploitation: 0, resultatFinancier: 0, resultatCourant: 0, resultatExceptionnel: 0, resultatNet: 0
         )
 
         print("📊 SIG N: Marge=\(sigN.margeBrute), CA=\(vars.caHT), Coûts=\(vars.coutsDirects)")
@@ -1548,6 +1553,7 @@ enum SigCalculator {
         sig.ebeSig = sigN.ebeSig
         sig.resultatExploitation = sigN.resultatExploitation
         sig.resultatFinancier = sigN.resultatFinancier
+        sig.resultatCourant = sigN.resultatCourant
         sig.resultatExceptionnel = sigN.resultatExceptionnel
         sig.resultatNet = sigN.resultatNet
 
@@ -1557,6 +1563,7 @@ enum SigCalculator {
         sig.ebeSigN1 = sigNMinus1.ebeSig
         sig.resultatExploitationN1 = sigNMinus1.resultatExploitation
         sig.resultatFinancierN1 = sigNMinus1.resultatFinancier
+        sig.resultatCourantN1 = sigNMinus1.resultatCourant
         sig.resultatExceptionnelN1 = sigNMinus1.resultatExceptionnel
         sig.resultatNetN1 = sigNMinus1.resultatNet
 
@@ -1566,19 +1573,25 @@ enum SigCalculator {
         sig.ebeSigN2 = sigNMinus2.ebeSig
         sig.resultatExploitationN2 = sigNMinus2.resultatExploitation
         sig.resultatFinancierN2 = sigNMinus2.resultatFinancier
+        sig.resultatCourantN2 = sigNMinus2.resultatCourant
         sig.resultatExceptionnelN2 = sigNMinus2.resultatExceptionnel
         sig.resultatNetN2 = sigNMinus2.resultatNet
 
         sig.caHT = vars.caHT
         sig.coutsDirects = vars.coutsDirects
+        sig.autresAchats = vars.autresAchats
+        sig.servicesExternes = vars.servicesExternes
+        sig.autresServices = vars.autresServices
         sig.productionVendue = vars.productionVendue
         sig.productionStockee = vars.productionStockee
         sig.productionImmobilisee = vars.productionImmobilisee
         sig.consommationsExternes = vars.consommationsExternes
-        sig.fraisPersonnel = vars.fraisPersonnel
         sig.impotsEtTaxes = vars.impotsEtTaxes
-        sig.autresProduitExploitation = vars.autresProduitExploitation
+        sig.fraisPersonnel = vars.fraisPersonnel
         sig.autresChargesExploitation = vars.autresChargesExploitation
+        sig.produitsDivers = vars.produitsDivers
+        sig.dotations = vars.dotations
+        sig.reprises = vars.reprises
         sig.produitsFinanciers = vars.produitsFinanciers
         sig.chargesFinancieres = vars.chargesFinancieres
         sig.produitsExceptionnels = vars.produitsExceptionnels
@@ -1623,14 +1636,15 @@ enum SigCalculator {
         // ÉTAPE 5 : RÉSULTAT COURANT = Résultat exploitation - Charges financières
         let chargesFinancieres = sumBalance(["661", "662", "663", "664", "665"])
         let resultatFinancier = -chargesFinancieres
+        let resultatCourant = resultatExploitation + resultatFinancier
 
         // ÉTAPE 6 : RÉSULTAT EXCEPTIONNEL = Produits exceptionnels - Charges exceptionnelles
         let produitsExceptionnels = -sumBalance(["771", "772", "773", "774", "775", "776", "777", "778"])
         let chargesExceptionnels = sumBalance(["671", "672", "673", "674", "675"])
         let resultatExceptionnel = produitsExceptionnels - chargesExceptionnels
 
-        // ÉTAPE 7 : RÉSULTAT NET = Résultat exploitation + Résultat financier + Résultat exceptionnel
-        let resultatNet = resultatExploitation + resultatFinancier + resultatExceptionnel
+        // ÉTAPE 7 : RÉSULTAT NET = Résultat courant + Résultat exceptionnel
+        let resultatNet = resultatCourant + resultatExceptionnel
 
         let sig = SigValues(
             margeBrute: margeBrute,
@@ -1639,6 +1653,7 @@ enum SigCalculator {
             ebeSig: ebe,
             resultatExploitation: resultatExploitation,
             resultatFinancier: resultatFinancier,
+            resultatCourant: resultatCourant,
             resultatExceptionnel: resultatExceptionnel,
             resultatNet: resultatNet
         )
@@ -1646,14 +1661,19 @@ enum SigCalculator {
         let vars = VarsValues(
             caHT: ventes,
             coutsDirects: matieres,
+            autresAchats: autresAchats,
+            servicesExternes: servicesExternes,
+            autresServices: autresServices,
             productionVendue: 0,
             productionStockee: 0,
             productionImmobilisee: 0,
             consommationsExternes: consommationsExternes,
-            fraisPersonnel: salaires,
             impotsEtTaxes: impots,
-            autresProduitExploitation: produitsDivers,
+            fraisPersonnel: salaires,
             autresChargesExploitation: autresCharges,
+            produitsDivers: produitsDivers,
+            dotations: dotations,
+            reprises: reprises,
             produitsFinanciers: 0,
             chargesFinancieres: chargesFinancieres,
             produitsExceptionnels: produitsExceptionnels,
@@ -1671,6 +1691,7 @@ enum SigCalculator {
         let ebeSig: Double
         let resultatExploitation: Double
         let resultatFinancier: Double
+        let resultatCourant: Double
         let resultatExceptionnel: Double
         let resultatNet: Double
     }
@@ -1678,14 +1699,19 @@ enum SigCalculator {
     private struct VarsValues {
         let caHT: Double
         let coutsDirects: Double
+        let autresAchats: Double
+        let servicesExternes: Double
+        let autresServices: Double
         let productionVendue: Double
         let productionStockee: Double
         let productionImmobilisee: Double
         let consommationsExternes: Double
-        let fraisPersonnel: Double
         let impotsEtTaxes: Double
-        let autresProduitExploitation: Double
+        let fraisPersonnel: Double
         let autresChargesExploitation: Double
+        let produitsDivers: Double
+        let dotations: Double
+        let reprises: Double
         let produitsFinanciers: Double
         let chargesFinancieres: Double
         let produitsExceptionnels: Double
