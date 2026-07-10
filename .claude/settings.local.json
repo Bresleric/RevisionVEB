@@ -33,7 +33,8 @@
       "Bash(git commit -m 'fix\\(cycle A\\): revert aux patterns EXACTS du prompt PLANB SARL *)",
       "Bash(git commit -m 'wip\\(cycle A\\): Investigation structure réelle du CSV OneDrive *)",
       "Bash(git commit -m 'fix\\(cycle A\\): SIG complet avec 7 étapes exactes du prompt PLANB *)",
-      "Bash(git commit -m 'feat\\(cycle A\\): Tableau SIG 21 lignes complètes avec détails séparés *)"
+      "Bash(git commit -m 'feat\\(cycle A\\): Tableau SIG 21 lignes complètes avec détails séparés *)",
+      "Bash(git commit -m 'fix\\(cycle A\\): Afficher 0 pour N-1/N-2 dans les détails SIG *)"
     ]
   }
 }

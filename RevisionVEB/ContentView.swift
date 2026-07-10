@@ -1396,35 +1396,35 @@ struct SigView: View {
         guard let sig = sig else { return [] }
         return [
             // ÉTAPE 1 : MARGE BRUTE
-            ("Ventes", sig.caHT, sig.caHT, 0, false, nil),
-            ("– Matières premières", sig.coutsDirects, sig.coutsDirects, 0, false, nil),
+            ("Ventes", sig.caHT, 0, 0, false, nil),
+            ("– Matières premières", sig.coutsDirects, 0, 0, false, nil),
             ("= Marge brute", sig.margeBrute, sig.margeBruteN1, sig.margeBruteN2, true, nil),
 
             // ÉTAPE 2 : VALEUR AJOUTÉE
-            ("– Autres achats (606)", sig.autresAchats, sig.autresAchats, 0, false, nil),
-            ("– Services externes", sig.servicesExternes, sig.servicesExternes, 0, false, nil),
-            ("– Autres services", sig.autresServices, sig.autresServices, 0, false, nil),
+            ("– Autres achats (606)", sig.autresAchats, 0, 0, false, nil),
+            ("– Services externes", sig.servicesExternes, 0, 0, false, nil),
+            ("– Autres services", sig.autresServices, 0, 0, false, nil),
             ("= Valeur ajoutée", sig.valeurAjoutee, sig.valeurAjouteeN1, sig.valeurAjouteeN2, true, nil),
 
             // ÉTAPE 3 : EBE
-            ("– Impôts/taxes", sig.impotsEtTaxes, sig.impotsEtTaxes, 0, false, nil),
-            ("– Salaires", sig.fraisPersonnel, sig.fraisPersonnel, 0, false, nil),
-            ("– Autres charges", sig.autresChargesExploitation, sig.autresChargesExploitation, 0, false, nil),
+            ("– Impôts/taxes", sig.impotsEtTaxes, 0, 0, false, nil),
+            ("– Salaires", sig.fraisPersonnel, 0, 0, false, nil),
+            ("– Autres charges", sig.autresChargesExploitation, 0, 0, false, nil),
             ("= EBE", sig.ebeSig, sig.ebeSigN1, sig.ebeSigN2, true, "yellow"),
 
             // ÉTAPE 4 : RÉSULTAT EXPLOITATION
-            ("+ Produits divers", sig.produitsDivers, sig.produitsDivers, 0, false, nil),
-            ("– Dotations amort.", sig.dotations, sig.dotations, 0, false, nil),
-            ("+ Reprises amort./prov.", sig.reprises, sig.reprises, 0, false, nil),
+            ("+ Produits divers", sig.produitsDivers, 0, 0, false, nil),
+            ("– Dotations amort.", sig.dotations, 0, 0, false, nil),
+            ("+ Reprises amort./prov.", sig.reprises, 0, 0, false, nil),
             ("= Résultat d'exploitation", sig.resultatExploitation, sig.resultatExploitationN1, sig.resultatExploitationN2, true, nil),
 
             // ÉTAPE 5 : RÉSULTAT COURANT
-            ("– Charges financières", sig.chargesFinancieres, sig.chargesFinancieres, 0, false, nil),
+            ("– Charges financières", sig.chargesFinancieres, 0, 0, false, nil),
             ("= Résultat courant", sig.resultatCourant, sig.resultatCourantN1, sig.resultatCourantN2, true, nil),
 
             // ÉTAPE 6 : RÉSULTAT EXCEPTIONNEL
-            ("+ Produits exceptionnels", sig.produitsExceptionnels, sig.produitsExceptionnels, 0, false, nil),
-            ("– Charges exceptionnelles", sig.chargesExceptionnels, sig.chargesExceptionnels, 0, false, nil),
+            ("+ Produits exceptionnels", sig.produitsExceptionnels, 0, 0, false, nil),
+            ("– Charges exceptionnelles", sig.chargesExceptionnels, 0, 0, false, nil),
             ("= Résultat exceptionnel", sig.resultatExceptionnel, sig.resultatExceptionnelN1, sig.resultatExceptionnelN2, true, nil),
 
             // ÉTAPE 7 : RÉSULTAT NET
