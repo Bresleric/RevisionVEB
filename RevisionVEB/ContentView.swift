@@ -1595,54 +1595,48 @@ enum SigCalculator {
     }
 
     private static func calculateSigValues(_ sumBalance: ([String]) -> Double) -> (sig: SigValues, vars: VarsValues) {
-        // 1. Ventes marchandises + Production (classe 7 = créditeurs, inverser le signe)
-        let caHT = -sumBalance(["70"])
-        let productionVendue = -sumBalance(["71"])
-        let productionStockee = -sumBalance(["72"])
-        let productionImmobilisee = -sumBalance(["73"])
-        let ventesEtProduction = caHT + productionVendue + productionStockee + productionImmobilisee
+        // ÉTAPE 1 : MARGE BRUTE = Ventes - Matières premières
+        let ventes = -sumBalance(["70"])  // Classe 7 = créditeur, inverser signe
+        let matieres = sumBalance(["601", "602", "603", "607", "608", "609"])
+        let margeBrute = ventes - matieres
 
-        // 2. Marge brute de production
-        let coutsDirects = sumBalance(["60"])
-        let margeBrute = ventesEtProduction - coutsDirects
+        // ÉTAPE 2 : VALEUR AJOUTÉE = Marge brute - Autres achats - Services externes - Autres services
+        let autresAchats = sumBalance(["606"])
+        let servicesExternes = sumBalance(["611", "612", "613", "614", "615", "616", "617", "618"])
+        let autresServices = sumBalance(["621", "622", "623", "624", "625", "626", "627", "628"])
+        let valeurAjoutee = margeBrute - autresAchats - servicesExternes - autresServices
 
-        // 3. Autres achats + charges externes
-        let consommationsExternes = sumBalance(["61", "62"])
-        let valeurAjoutee = margeBrute - consommationsExternes
+        let consommationsExternes = autresAchats + servicesExternes + autresServices
 
-        // 4. EBE (Excédent brut d'exploitation)
-        let subventions = -sumBalance(["74"])  // Classe 7 = créditeur
-        let impotsEtTaxes = sumBalance(["63"])
-        let fraisPersonnel = sumBalance(["64"])
-        let ebeSig = valeurAjoutee + subventions - impotsEtTaxes - fraisPersonnel
+        // ÉTAPE 3 : EBE = VA - Impôts - Salaires - Autres charges
+        let impots = sumBalance(["631", "632", "633", "634", "635", "636", "637", "638"])
+        let salaires = sumBalance(["641", "642", "643", "644", "645", "646", "647", "648"])
+        let autresCharges = sumBalance(["651", "652", "653", "654", "655", "656", "657", "658"])
+        let ebe = valeurAjoutee - impots - salaires - autresCharges
 
-        // 5. Résultat d'exploitation
-        let autresProduitExploitation = -sumBalance(["75"])  // Classe 7
-        let autresChargesExploitation = sumBalance(["65"])
-        let reprises = -sumBalance(["78"])  // Classe 7
-        let dotations = sumBalance(["68"])
-        let resultatExploitation = ebeSig + autresProduitExploitation - autresChargesExploitation + reprises - dotations
+        // ÉTAPE 4 : RÉSULTAT D'EXPLOITATION = EBE + Produits divers - Dotations + Reprises
+        let produitsDivers = -sumBalance(["751", "752", "753", "754", "755", "756", "757", "758"])
+        let dotations = sumBalance(["681", "682", "683", "684", "685"])
+        let reprises = -sumBalance(["791", "792", "793", "794", "795", "796", "797", "798"])
+        let resultatExploitation = ebe + produitsDivers - dotations + reprises
 
-        // 6. Résultat courant (avant résultat exceptionnel)
-        let produitsFinanciers = -sumBalance(["76"])  // Classe 7
-        let chargesFinancieres = sumBalance(["66"])
-        let resultatFinancier = produitsFinanciers - chargesFinancieres
-        let resultatCourant = resultatExploitation + resultatFinancier
+        // ÉTAPE 5 : RÉSULTAT COURANT = Résultat exploitation - Charges financières
+        let chargesFinancieres = sumBalance(["661", "662", "663", "664", "665"])
+        let resultatFinancier = -chargesFinancieres
 
-        // 7. Résultat exceptionnel
-        let produitsExceptionnels = -sumBalance(["77"])  // Classe 7
-        let chargesExceptionnels = sumBalance(["67"])
+        // ÉTAPE 6 : RÉSULTAT EXCEPTIONNEL = Produits exceptionnels - Charges exceptionnelles
+        let produitsExceptionnels = -sumBalance(["771", "772", "773", "774", "775", "776", "777", "778"])
+        let chargesExceptionnels = sumBalance(["671", "672", "673", "674", "675"])
         let resultatExceptionnel = produitsExceptionnels - chargesExceptionnels
 
-        // 8. Résultat NET
-        let impotSurBenefices = sumBalance(["69"])
-        let resultatNet = resultatCourant + resultatExceptionnel - impotSurBenefices
+        // ÉTAPE 7 : RÉSULTAT NET = Résultat exploitation + Résultat financier + Résultat exceptionnel
+        let resultatNet = resultatExploitation + resultatFinancier + resultatExceptionnel
 
         let sig = SigValues(
             margeBrute: margeBrute,
-            productionExercice: productionVendue + productionStockee + productionImmobilisee,
+            productionExercice: 0,
             valeurAjoutee: valeurAjoutee,
-            ebeSig: ebeSig,
+            ebeSig: ebe,
             resultatExploitation: resultatExploitation,
             resultatFinancier: resultatFinancier,
             resultatExceptionnel: resultatExceptionnel,
@@ -1650,21 +1644,21 @@ enum SigCalculator {
         )
 
         let vars = VarsValues(
-            caHT: ventesEtProduction,
-            coutsDirects: coutsDirects,
-            productionVendue: productionVendue,
-            productionStockee: productionStockee,
-            productionImmobilisee: productionImmobilisee,
+            caHT: ventes,
+            coutsDirects: matieres,
+            productionVendue: 0,
+            productionStockee: 0,
+            productionImmobilisee: 0,
             consommationsExternes: consommationsExternes,
-            fraisPersonnel: fraisPersonnel,
-            impotsEtTaxes: impotsEtTaxes,
-            autresProduitExploitation: autresProduitExploitation,
-            autresChargesExploitation: autresChargesExploitation,
-            produitsFinanciers: produitsFinanciers,
+            fraisPersonnel: salaires,
+            impotsEtTaxes: impots,
+            autresProduitExploitation: produitsDivers,
+            autresChargesExploitation: autresCharges,
+            produitsFinanciers: 0,
             chargesFinancieres: chargesFinancieres,
             produitsExceptionnels: produitsExceptionnels,
             chargesExceptionnels: chargesExceptionnels,
-            impotSurBenefices: impotSurBenefices
+            impotSurBenefices: 0
         )
 
         return (sig, vars)

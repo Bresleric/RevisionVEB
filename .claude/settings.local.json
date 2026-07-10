@@ -25,7 +25,8 @@
       "Bash(git commit -m 'fix\\(cycle A\\): correction assignements valeurs SIG *)",
       "Bash(git reset *)",
       "Bash(find ~/Library -name \"*.sqlite*\" -type f 2>/dev/null | grep -i revision | head -20)",
-      "Bash(git commit -m 'chore: préparation pour implémentation SIG mode opératoire PLANB *)"
+      "Bash(git commit -m 'chore: préparation pour implémentation SIG mode opératoire PLANB *)",
+      "Bash(git commit -m 'feat\\(cycle A\\): implémentation 7 étapes SIG mode opératoire PLANB exact *)"
     ]
   }
 }
