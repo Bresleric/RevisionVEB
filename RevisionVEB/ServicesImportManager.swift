@@ -225,7 +225,7 @@ final class ImportManager: ObservableObject {
     }
 
     private struct BalanceColumns {
-        var compte = -1, code = -1, intitule = -1, debit = -1, credit = -1, soldeN = -1, soldeN1 = -1, soldeN2 = -1
+        var compte = -1, code = -1, intitule = -1, debit = -1, credit = -1, soldeN = -1, soldeN1 = -1
     }
 
     private static func detectSeparator(_ headerLine: String) -> String {
@@ -244,8 +244,8 @@ final class ImportManager: ObservableObject {
             else if (c.contains("intitul") || c.contains("libell")) && m.intitule < 0 { m.intitule = i }
             else if c.contains("debit") && m.debit < 0 { m.debit = i }
             else if c.contains("credit") && m.credit < 0 { m.credit = i }
-            else if (c.contains("n-2") || c.contains("n - 2")) && m.soldeN2 < 0 { m.soldeN2 = i }
             else if (c.contains("n-1") || c.contains("n - 1")) && m.soldeN1 < 0 { m.soldeN1 = i }
+            else if c.contains("n-2") || c.contains("n - 2") { /* ignore le solde N-2 */ }
             else if c.contains("solde") && m.soldeN < 0 { m.soldeN = i }
         }
         return m
@@ -311,7 +311,6 @@ final class ImportManager: ObservableObject {
                 credit: Self.parseFrenchAmount(value(row, cols.credit)) ?? 0,
                 balanceN: Self.parseFrenchAmount(value(row, cols.soldeN)) ?? 0,
                 balanceNMinus1: Self.parseFrenchAmount(value(row, cols.soldeN1)) ?? 0,
-                balanceNMinus2: Self.parseFrenchAmount(value(row, cols.soldeN2)) ?? 0,
                 exerciceID: exerciceID,
                 sourceFile: fileName
             )
