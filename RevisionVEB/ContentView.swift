@@ -1451,11 +1451,11 @@ struct SigView: View {
                         HStack(spacing: 0) {
                             Text("").frame(width: 240, alignment: .leading).padding(.horizontal, 8)
                             Divider().frame(height: 30)
-                            Text("Exercice N").frame(minWidth: 130, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
+                            Text("Exercice N").frame(minWidth: 150, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
                             Divider().frame(height: 30)
-                            Text("Exercice N-1").frame(minWidth: 130, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
+                            Text("Exercice N-1").frame(minWidth: 150, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
                             Divider().frame(height: 30)
-                            Text("Exercice N-2").frame(minWidth: 130, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
+                            Text("Exercice N-2").frame(minWidth: 150, alignment: .center).font(.caption).fontWeight(.semibold).padding(.horizontal, 8)
                         }
                         .padding(.vertical, 8)
                         Divider()
@@ -1469,15 +1469,15 @@ struct SigView: View {
                                 Divider()
                                 Text(formatEuro(item.montantN))
                                     .monospacedDigit()
-                                    .frame(minWidth: 130, alignment: .trailing).padding(.horizontal, 8)
+                                    .frame(minWidth: 150, alignment: .trailing).padding(.horizontal, 8)
                                 Divider()
                                 Text(formatEuro(item.montantN1))
                                     .monospacedDigit().foregroundStyle(.secondary)
-                                    .frame(minWidth: 130, alignment: .trailing).padding(.horizontal, 8)
+                                    .frame(minWidth: 150, alignment: .trailing).padding(.horizontal, 8)
                                 Divider()
                                 Text(formatEuro(item.montantN2))
                                     .monospacedDigit().foregroundStyle(.secondary)
-                                    .frame(minWidth: 130, alignment: .trailing).padding(.horizontal, 8)
+                                    .frame(minWidth: 150, alignment: .trailing).padding(.horizontal, 8)
                             }
                             .frame(height: 28)
                             .background(
@@ -1556,8 +1556,6 @@ enum SigCalculator {
         sig.resultatCourant = sigN.resultatCourant
         sig.resultatExceptionnel = sigN.resultatExceptionnel
         sig.resultatNet = sigN.resultatNet
-
-        print("📊 Assignation SIG N: Rés.Courant assigné = \(sig.resultatCourant)")
 
         sig.margeBruteN1 = sigNMinus1.margeBrute
         sig.productionExerciceN1 = sigNMinus1.productionExercice
@@ -1639,7 +1637,6 @@ enum SigCalculator {
         let chargesFinancieres = sumBalance(["661", "662", "663", "664", "665"])
         let resultatFinancier = -chargesFinancieres
         let resultatCourant = resultatExploitation + resultatFinancier
-        print("🔍 ÉTAPE 5: Rés.Expl=\(resultatExploitation), Charges Fin=\(chargesFinancieres), Rés.Fin=\(resultatFinancier), Rés.Courant=\(resultatCourant)")
 
         // ÉTAPE 6 : RÉSULTAT EXCEPTIONNEL = Produits exceptionnels - Charges exceptionnelles
         let produitsExceptionnels = -sumBalance(["771", "772", "773", "774", "775", "776", "777", "778"])
