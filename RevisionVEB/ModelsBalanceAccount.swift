@@ -580,6 +580,22 @@ final class SoldesIntermedialres {
     var chargesExceptionnels: Double = 0   // 67x
     var impotSurBenefices: Double = 0
 
+    // Variantes N-1 pour les détails
+    var caHTN1: Double = 0
+    var coutsDirectsN1: Double = 0
+    var autresAchatsN1: Double = 0
+    var servicesExternesN1: Double = 0
+    var autresServicesN1: Double = 0
+    var impotsEtTaxesN1: Double = 0
+    var fraisPersonnelN1: Double = 0
+    var autresChargesExploitationN1: Double = 0
+    var produitsDiversN1: Double = 0
+    var dotationsN1: Double = 0
+    var reprisesN1: Double = 0
+    var chargesFinanciereN1: Double = 0
+    var produitsExceptionnelsN1: Double = 0
+    var chargesExceptionnelsN1: Double = 0
+
     var updatedAt: Date = Date()
 
     init(exerciceID: UUID) {

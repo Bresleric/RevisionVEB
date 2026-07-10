@@ -1396,35 +1396,35 @@ struct SigView: View {
         guard let sig = sig else { return [] }
         return [
             // ÉTAPE 1 : MARGE BRUTE
-            ("Ventes", sig.caHT, 0, 0, false, nil),
-            ("– Matières premières", sig.coutsDirects, 0, 0, false, nil),
+            ("Ventes", sig.caHT, sig.caHTN1, 0, false, nil),
+            ("– Matières premières", sig.coutsDirects, sig.coutsDirectsN1, 0, false, nil),
             ("= Marge brute", sig.margeBrute, sig.margeBruteN1, sig.margeBruteN2, true, nil),
 
             // ÉTAPE 2 : VALEUR AJOUTÉE
-            ("– Autres achats (606)", sig.autresAchats, 0, 0, false, nil),
-            ("– Services externes", sig.servicesExternes, 0, 0, false, nil),
-            ("– Autres services", sig.autresServices, 0, 0, false, nil),
+            ("– Autres achats (606)", sig.autresAchats, sig.autresAchatsN1, 0, false, nil),
+            ("– Services externes", sig.servicesExternes, sig.servicesExternesN1, 0, false, nil),
+            ("– Autres services", sig.autresServices, sig.autresServicesN1, 0, false, nil),
             ("= Valeur ajoutée", sig.valeurAjoutee, sig.valeurAjouteeN1, sig.valeurAjouteeN2, true, nil),
 
             // ÉTAPE 3 : EBE
-            ("– Impôts/taxes", sig.impotsEtTaxes, 0, 0, false, nil),
-            ("– Salaires", sig.fraisPersonnel, 0, 0, false, nil),
-            ("– Autres charges", sig.autresChargesExploitation, 0, 0, false, nil),
+            ("– Impôts/taxes", sig.impotsEtTaxes, sig.impotsEtTaxesN1, 0, false, nil),
+            ("– Salaires", sig.fraisPersonnel, sig.fraisPersonnelN1, 0, false, nil),
+            ("– Autres charges", sig.autresChargesExploitation, sig.autresChargesExploitationN1, 0, false, nil),
             ("= EBE", sig.ebeSig, sig.ebeSigN1, sig.ebeSigN2, true, "yellow"),
 
             // ÉTAPE 4 : RÉSULTAT EXPLOITATION
-            ("+ Produits divers", sig.produitsDivers, 0, 0, false, nil),
-            ("– Dotations amort.", sig.dotations, 0, 0, false, nil),
-            ("+ Reprises amort./prov.", sig.reprises, 0, 0, false, nil),
+            ("+ Produits divers", sig.produitsDivers, sig.produitsDiversN1, 0, false, nil),
+            ("– Dotations amort.", sig.dotations, sig.dotationsN1, 0, false, nil),
+            ("+ Reprises amort./prov.", sig.reprises, sig.reprisesN1, 0, false, nil),
             ("= Résultat d'exploitation", sig.resultatExploitation, sig.resultatExploitationN1, sig.resultatExploitationN2, true, nil),
 
             // ÉTAPE 5 : RÉSULTAT COURANT
-            ("– Charges financières", sig.chargesFinancieres, 0, 0, false, nil),
+            ("– Charges financières", sig.chargesFinancieres, sig.chargesFinanciereN1, 0, false, nil),
             ("= Résultat courant", sig.resultatCourant, sig.resultatCourantN1, sig.resultatCourantN2, true, nil),
 
             // ÉTAPE 6 : RÉSULTAT EXCEPTIONNEL
-            ("+ Produits exceptionnels", sig.produitsExceptionnels, 0, 0, false, nil),
-            ("– Charges exceptionnelles", sig.chargesExceptionnels, 0, 0, false, nil),
+            ("+ Produits exceptionnels", sig.produitsExceptionnels, sig.produitsExceptionnelsN1, 0, false, nil),
+            ("– Charges exceptionnelles", sig.chargesExceptionnels, sig.chargesExceptionnelsN1, 0, false, nil),
             ("= Résultat exceptionnel", sig.resultatExceptionnel, sig.resultatExceptionnelN1, sig.resultatExceptionnelN2, true, nil),
 
             // ÉTAPE 7 : RÉSULTAT NET
@@ -1532,7 +1532,7 @@ enum SigCalculator {
 
         // Calcul pour les exercices N et N-1
         let (sigN, vars) = calculateSigValues(sumBalanceN)
-        let sigNMinus1 = calculateSigValues(sumBalanceNMinus1).0
+        let (sigNMinus1, varsN1) = calculateSigValues(sumBalanceNMinus1)
 
         // N-2 = vide pour l'instant (nécessiterait une 3e colonne dans l'import)
         let sigNMinus2 = SigValues(
@@ -1597,6 +1597,22 @@ enum SigCalculator {
         sig.produitsExceptionnels = vars.produitsExceptionnels
         sig.chargesExceptionnels = vars.chargesExceptionnels
         sig.impotSurBenefices = vars.impotSurBenefices
+
+        // Assignation N-1
+        sig.caHTN1 = varsN1.caHT
+        sig.coutsDirectsN1 = varsN1.coutsDirects
+        sig.autresAchatsN1 = varsN1.autresAchats
+        sig.servicesExternesN1 = varsN1.servicesExternes
+        sig.autresServicesN1 = varsN1.autresServices
+        sig.impotsEtTaxesN1 = varsN1.impotsEtTaxes
+        sig.fraisPersonnelN1 = varsN1.fraisPersonnel
+        sig.autresChargesExploitationN1 = varsN1.autresChargesExploitation
+        sig.produitsDiversN1 = varsN1.produitsDivers
+        sig.dotationsN1 = varsN1.dotations
+        sig.reprisesN1 = varsN1.reprises
+        sig.chargesFinanciereN1 = varsN1.chargesFinancieres
+        sig.produitsExceptionnelsN1 = varsN1.produitsExceptionnels
+        sig.chargesExceptionnelsN1 = varsN1.chargesExceptionnels
 
         // Supprimer l'ancien SIG s'il existe et insérer le nouveau
         if let existing = try? modelContext.fetch(FetchDescriptor<SoldesIntermedialres>()).first(where: { $0.exerciceID == exerciceID }) {
