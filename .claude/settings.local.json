@@ -26,7 +26,10 @@
       "Bash(git reset *)",
       "Bash(find ~/Library -name \"*.sqlite*\" -type f 2>/dev/null | grep -i revision | head -20)",
       "Bash(git commit -m 'chore: préparation pour implémentation SIG mode opératoire PLANB *)",
-      "Bash(git commit -m 'feat\\(cycle A\\): implémentation 7 étapes SIG mode opératoire PLANB exact *)"
+      "Bash(git commit -m 'feat\\(cycle A\\): implémentation 7 étapes SIG mode opératoire PLANB exact *)",
+      "Bash(log stream *)",
+      "Bash(/Users/eric/Library/Developer/Xcode/DerivedData/RevisionVEB-glkescnxodmomierqzhipdqybqfe/Build/Products/Debug/RevisionVEB.app/Contents/MacOS/RevisionVEB)",
+      "Bash(git commit -m 'debug\\(cycle A\\): investigation des écarts SIG - patterns de comptes *)"
     ]
   }
 }
