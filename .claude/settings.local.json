@@ -36,7 +36,8 @@
       "Bash(git commit -m 'feat\\(cycle A\\): Tableau SIG 21 lignes complètes avec détails séparés *)",
       "Bash(git commit -m 'fix\\(cycle A\\): Afficher 0 pour N-1/N-2 dans les détails SIG *)",
       "Bash(git commit -m 'perf\\(cycle A\\): Agrandir les colonnes du tableau SIG pour meilleure lisibilité *)",
-      "Bash(git commit -m 'debug\\(cycle A\\): Ajouter logs pour déboguer le calcul de Résultat courant *)"
+      "Bash(git commit -m 'debug\\(cycle A\\): Ajouter logs pour déboguer le calcul de Résultat courant *)",
+      "Bash(git commit -m 'debug\\(cycle A\\): Ajouter logs additionnels pour vérifier l'\\\\''assignation de Résultat courant *)"
     ]
   }
 }

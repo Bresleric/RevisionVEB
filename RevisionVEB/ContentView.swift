@@ -1557,6 +1557,8 @@ enum SigCalculator {
         sig.resultatExceptionnel = sigN.resultatExceptionnel
         sig.resultatNet = sigN.resultatNet
 
+        print("📊 Assignation SIG N: Rés.Courant assigné = \(sig.resultatCourant)")
+
         sig.margeBruteN1 = sigNMinus1.margeBrute
         sig.productionExerciceN1 = sigNMinus1.productionExercice
         sig.valeurAjouteeN1 = sigNMinus1.valeurAjoutee
