@@ -19,7 +19,13 @@
       "Bash(git commit -m 'feat\\(cycle A\\): tableau avec colonnes par exercice *)",
       "Bash(git commit -m 'feat\\(cycle A\\): affichage N, N-1, N-2 dans tableau comparatif *)",
       "Bash(find ~/.local/share -name \"*.sqlite*\" 2>/dev/null | head -10)",
-      "Bash(git commit -m 'fix\\(cycle A\\): revert N-2 pour compatibilité schéma SwiftData *)"
+      "Bash(git commit -m 'fix\\(cycle A\\): revert N-2 pour compatibilité schéma SwiftData *)",
+      "Bash(killall RevisionVEB 2>/dev/null; rm -rf ~/Library/Developer/Xcode/DerivedData/RevisionVEB-*/Build/Products/Debug/RevisionVEB.app 2>/dev/null; sleep 2; open /Users/eric/Library/Developer/Xcode/DerivedData/RevisionVEB-glkescnxodmomierqzhipdqybqfe/Build/Products/Debug/RevisionVEB.app; sleep 3; echo \"✅ App relancée - schéma compatible\")",
+      "Bash(xcodebuild build *)",
+      "Bash(git commit -m 'fix\\(cycle A\\): correction assignements valeurs SIG *)",
+      "Bash(git reset *)",
+      "Bash(find ~/Library -name \"*.sqlite*\" -type f 2>/dev/null | grep -i revision | head -20)",
+      "Bash(git commit -m 'chore: préparation pour implémentation SIG mode opératoire PLANB *)"
     ]
   }
 }
