@@ -39,7 +39,8 @@
       "Bash(git commit -m 'debug\\(cycle A\\): Ajouter logs pour déboguer le calcul de Résultat courant *)",
       "Bash(git commit -m 'debug\\(cycle A\\): Ajouter logs additionnels pour vérifier l'\\\\''assignation de Résultat courant *)",
       "Bash(git commit -m 'fix\\(cycle A\\): Augmenter largeur des colonnes SIG et nettoyer logs debug *)",
-      "Bash(git commit -m 'feat\\(cycle A\\): Ajouter détails N-1 au tableau SIG *)"
+      "Bash(git commit -m 'feat\\(cycle A\\): Ajouter détails N-1 au tableau SIG *)",
+      "Bash(git commit -m 'feat\\(cycle A\\): Importer et afficher les valeurs N-2 \\(2023\\) depuis le CSV *)"
     ]
   }
 }

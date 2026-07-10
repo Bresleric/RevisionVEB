@@ -18,6 +18,7 @@ final class BalanceAccount {
     var credit: Double
     var balanceN: Double
     var balanceNMinus1: Double
+    var balanceNMinus2: Double
     var restaurant: Restaurant
     var exerciceID: UUID
     var sourceFile: String
@@ -32,6 +33,7 @@ final class BalanceAccount {
         credit: Double,
         balanceN: Double,
         balanceNMinus1: Double,
+        balanceNMinus2: Double = 0,
         restaurant: Restaurant = .freddy,
         exerciceID: UUID,
         sourceFile: String,
@@ -45,6 +47,7 @@ final class BalanceAccount {
         self.credit = credit
         self.balanceN = balanceN
         self.balanceNMinus1 = balanceNMinus1
+        self.balanceNMinus2 = balanceNMinus2
         self.restaurant = restaurant
         self.exerciceID = exerciceID
         self.sourceFile = sourceFile
@@ -595,6 +598,22 @@ final class SoldesIntermedialres {
     var chargesFinanciereN1: Double = 0
     var produitsExceptionnelsN1: Double = 0
     var chargesExceptionnelsN1: Double = 0
+
+    // Variantes N-2 pour les détails
+    var caHTN2: Double = 0
+    var coutsDirectsN2: Double = 0
+    var autresAchatsN2: Double = 0
+    var servicesExternesN2: Double = 0
+    var autresServicesN2: Double = 0
+    var impotsEtTaxesN2: Double = 0
+    var fraisPersonnelN2: Double = 0
+    var autresChargesExploitationN2: Double = 0
+    var produitsDiversN2: Double = 0
+    var dotationsN2: Double = 0
+    var reprisesN2: Double = 0
+    var chargesFinanciereN2: Double = 0
+    var produitsExceptionnelsN2: Double = 0
+    var chargesExceptionnelsN2: Double = 0
 
     var updatedAt: Date = Date()
 
