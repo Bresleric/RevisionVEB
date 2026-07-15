@@ -225,7 +225,7 @@ final class ImportManager: ObservableObject {
     }
 
     private struct BalanceColumns {
-        var compte = -1, code = -1, intitule = -1, debit = -1, credit = -1, soldeN = -1, soldeN1 = -1
+        var compte = -1, code = -1, intitule = -1, debit = -1, credit = -1, soldeN = -1, soldeN1 = -1, soldeN2 = -1
     }
 
     private static func detectSeparator(_ headerLine: String) -> String {
@@ -244,8 +244,8 @@ final class ImportManager: ObservableObject {
             else if (c.contains("intitul") || c.contains("libell")) && m.intitule < 0 { m.intitule = i }
             else if c.contains("debit") && m.debit < 0 { m.debit = i }
             else if c.contains("credit") && m.credit < 0 { m.credit = i }
+            else if (c.contains("n-2") || c.contains("n - 2")) && m.soldeN2 < 0 { m.soldeN2 = i }
             else if (c.contains("n-1") || c.contains("n - 1")) && m.soldeN1 < 0 { m.soldeN1 = i }
-            else if c.contains("n-2") || c.contains("n - 2") { /* ignore le solde N-2 */ }
             else if c.contains("solde") && m.soldeN < 0 { m.soldeN = i }
         }
         return m
@@ -295,6 +295,7 @@ final class ImportManager: ObservableObject {
         var success = 0
         var skipped = 0
         let total = max(lines.count - 1, 1)
+        var balanceHistoryData: [(accountNumber: String, balanceN1: Double, balanceN2: Double)] = []
 
         for (i, line) in lines.dropFirst().enumerated() {
             let row = line.components(separatedBy: sep).map { $0.trimmingCharacters(in: .whitespaces) }
@@ -316,7 +317,18 @@ final class ImportManager: ObservableObject {
             )
             modelContext.insert(account)
             success += 1
+
+            // Collecter les données N-1 et N-2 pour le cache
+            let balanceN1 = Self.parseFrenchAmount(value(row, cols.soldeN1)) ?? 0
+            let balanceN2 = cols.soldeN2 >= 0 ? (Self.parseFrenchAmount(value(row, cols.soldeN2)) ?? 0) : 0
+            balanceHistoryData.append((accountNumber: compte, balanceN1: balanceN1, balanceN2: balanceN2))
+
             if i % 25 == 0 { importProgress = Double(i) / Double(total) }
+        }
+
+        // Sauvegarder le cache N-1 et N-2
+        if !balanceHistoryData.isEmpty {
+            Self.saveBalanceCache(exerciceID: exerciceID, accounts: balanceHistoryData)
         }
 
         log.recordsCount = success
@@ -343,5 +355,72 @@ final class ImportManager: ObservableObject {
         importProgress = 1.0
         print("📊 Balance importee: \(success) comptes (\(skipped) lignes ignorees)")
         return log
+    }
+}
+
+// MARK: - Cache JSON N-1 et N-2 (données figées depuis Cegid)
+
+/// Structure pour le cache N-1 et N-2 des balances
+struct BalanceHistoryCache: Codable {
+    struct AccountBalance: Codable {
+        let accountNumber: String
+        let balanceN1: Double
+        let balanceN2: Double
+    }
+
+    let exerciceID: String
+    let importDate: Date
+    let accounts: [AccountBalance]
+}
+
+extension ImportManager {
+    /// Chemin du fichier de cache JSON pour N-1 et N-2
+    static func balanceCachePath(for exerciceID: UUID) -> URL {
+        let docDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let cacheDir = docDir.appendingPathComponent("BalanceCache")
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        return cacheDir.appendingPathComponent("balance-\(exerciceID.uuidString).json")
+    }
+
+    /// Sauvegarde les données N-1 et N-2 dans le cache JSON
+    static func saveBalanceCache(exerciceID: UUID, accounts: [(accountNumber: String, balanceN1: Double, balanceN2: Double)]) {
+        let cacheData = BalanceHistoryCache(
+            exerciceID: exerciceID.uuidString,
+            importDate: Date(),
+            accounts: accounts.map { BalanceHistoryCache.AccountBalance(accountNumber: $0.accountNumber, balanceN1: $0.balanceN1, balanceN2: $0.balanceN2) }
+        )
+
+        let url = balanceCachePath(for: exerciceID)
+        do {
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            let data = try encoder.encode(cacheData)
+            try data.write(to: url, options: .atomic)
+            print("💾 Cache N-1/N-2 sauvegardé: \(url.lastPathComponent) (\(accounts.count) comptes)")
+        } catch {
+            print("⚠️ Erreur lors de la sauvegarde du cache: \(error)")
+        }
+    }
+
+    /// Charge les données N-1 et N-2 depuis le cache JSON
+    static func loadBalanceCache(exerciceID: UUID) -> [String: (balanceN1: Double, balanceN2: Double)]? {
+        let url = balanceCachePath(for: exerciceID)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+
+        do {
+            let data = try Data(contentsOf: url)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let cache = try decoder.decode(BalanceHistoryCache.self, from: data)
+            var result: [String: (balanceN1: Double, balanceN2: Double)] = [:]
+            for account in cache.accounts {
+                result[account.accountNumber] = (account.balanceN1, account.balanceN2)
+            }
+            print("💾 Cache N-1/N-2 chargé: \(cache.accounts.count) comptes")
+            return result
+        } catch {
+            print("⚠️ Erreur lors du chargement du cache: \(error)")
+            return nil
+        }
     }
 }

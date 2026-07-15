@@ -1394,37 +1394,50 @@ struct SigView: View {
 
     private var sigsData: [(libelle: String, montantN: Double, montantN1: Double, montantN2: Double, isTotal: Bool, bgColor: String?)] {
         guard let sig = sig else { return [] }
+
+        // Charger le cache pour calculer N-2 des détails
+        let balanceN2Cache = ImportManager.loadBalanceCache(exerciceID: exerciceID) ?? [:]
+
+        func sumN2(for patterns: [String], negate: Bool = false) -> Double {
+            guard !balanceN2Cache.isEmpty else { return 0 }
+            let accounts = allAccounts.filter { $0.exerciceID == exerciceID }
+            let sum = accounts
+                .filter { acc in patterns.contains { pattern in acc.accountNumber.hasPrefix(pattern) } }
+                .reduce(0) { total, acc in total + (balanceN2Cache[acc.accountNumber]?.balanceN2 ?? 0) }
+            return negate ? -sum : sum
+        }
+
         return [
             // ÉTAPE 1 : MARGE BRUTE
-            ("Ventes", sig.caHT, sig.caHTN1, 0, false, nil),
-            ("– Matières premières", sig.coutsDirects, sig.coutsDirectsN1, 0, false, nil),
+            ("Ventes", sig.caHT, sig.caHTN1, sumN2(for: ["70", "71"]), false, nil),
+            ("– Matières premières", sig.coutsDirects, sig.coutsDirectsN1, sumN2(for: ["60"]), false, nil),
             ("= Marge brute", sig.margeBrute, sig.margeBruteN1, sig.margeBruteN2, true, nil),
 
             // ÉTAPE 2 : VALEUR AJOUTÉE
-            ("– Autres achats (606)", sig.autresAchats, sig.autresAchatsN1, 0, false, nil),
-            ("– Services externes", sig.servicesExternes, sig.servicesExternesN1, 0, false, nil),
-            ("– Autres services", sig.autresServices, sig.autresServicesN1, 0, false, nil),
+            ("– Autres achats (606)", sig.autresAchats, sig.autresAchatsN1, sumN2(for: ["606"]), false, nil),
+            ("– Services externes", sig.servicesExternes, sig.servicesExternesN1, sumN2(for: ["611", "612", "613", "614", "615", "616", "617", "618"]), false, nil),
+            ("– Autres services", sig.autresServices, sig.autresServicesN1, sumN2(for: ["621", "622", "623", "624", "625", "626", "627", "628"]), false, nil),
             ("= Valeur ajoutée", sig.valeurAjoutee, sig.valeurAjouteeN1, sig.valeurAjouteeN2, true, nil),
 
             // ÉTAPE 3 : EBE
-            ("– Impôts/taxes", sig.impotsEtTaxes, sig.impotsEtTaxesN1, 0, false, nil),
-            ("– Salaires", sig.fraisPersonnel, sig.fraisPersonnelN1, 0, false, nil),
-            ("– Autres charges", sig.autresChargesExploitation, sig.autresChargesExploitationN1, 0, false, nil),
+            ("– Impôts/taxes", sig.impotsEtTaxes, sig.impotsEtTaxesN1, sumN2(for: ["631", "632", "633", "634", "635", "636", "637", "638"]), false, nil),
+            ("– Salaires", sig.fraisPersonnel, sig.fraisPersonnelN1, sumN2(for: ["641", "642", "643", "644", "645", "646", "647", "648"]), false, nil),
+            ("– Autres charges", sig.autresChargesExploitation, sig.autresChargesExploitationN1, sumN2(for: ["651", "652", "653", "654", "655", "656", "657", "658"]), false, nil),
             ("= EBE", sig.ebeSig, sig.ebeSigN1, sig.ebeSigN2, true, "yellow"),
 
             // ÉTAPE 4 : RÉSULTAT EXPLOITATION
-            ("+ Produits divers", sig.produitsDivers, sig.produitsDiversN1, 0, false, nil),
-            ("– Dotations amort.", sig.dotations, sig.dotationsN1, 0, false, nil),
-            ("+ Reprises amort./prov.", sig.reprises, sig.reprisesN1, 0, false, nil),
+            ("+ Produits divers", sig.produitsDivers, sig.produitsDiversN1, sumN2(for: ["751", "752", "753", "754", "755", "756", "757", "758"], negate: true), false, nil),
+            ("– Dotations amort.", sig.dotations, sig.dotationsN1, sumN2(for: ["681", "682", "683", "684", "685"]), false, nil),
+            ("+ Reprises amort./prov.", sig.reprises, sig.reprisesN1, sumN2(for: ["791", "792", "793", "794", "795", "796", "797", "798"], negate: true), false, nil),
             ("= Résultat d'exploitation", sig.resultatExploitation, sig.resultatExploitationN1, sig.resultatExploitationN2, true, nil),
 
             // ÉTAPE 5 : RÉSULTAT COURANT
-            ("– Charges financières", sig.chargesFinancieres, sig.chargesFinanciereN1, 0, false, nil),
+            ("– Charges financières", sig.chargesFinancieres, sig.chargesFinanciereN1, sumN2(for: ["661", "662", "663", "664", "665"]), false, nil),
             ("= Résultat courant", sig.resultatCourant, sig.resultatCourantN1, sig.resultatCourantN2, true, nil),
 
             // ÉTAPE 6 : RÉSULTAT EXCEPTIONNEL
-            ("+ Produits exceptionnels", sig.produitsExceptionnels, sig.produitsExceptionnelsN1, 0, false, nil),
-            ("– Charges exceptionnelles", sig.chargesExceptionnels, sig.chargesExceptionnelsN1, 0, false, nil),
+            ("+ Produits exceptionnels", sig.produitsExceptionnels, sig.produitsExceptionnelsN1, sumN2(for: ["771", "772", "773", "774", "775", "776", "777", "778"], negate: true), false, nil),
+            ("– Charges exceptionnelles", sig.chargesExceptionnels, sig.chargesExceptionnelsN1, sumN2(for: ["671", "672", "673", "674", "675"]), false, nil),
             ("= Résultat exceptionnel", sig.resultatExceptionnel, sig.resultatExceptionnelN1, sig.resultatExceptionnelN2, true, nil),
 
             // ÉTAPE 7 : RÉSULTAT NET
@@ -1530,19 +1543,22 @@ enum SigCalculator {
                 .reduce(0) { $0 + $1.balanceNMinus1 }
         }
 
-        // Calcul pour les exercices N et N-1
+        // Charger le cache N-2 depuis le fichier JSON
+        let balanceN2Cache = ImportManager.loadBalanceCache(exerciceID: exerciceID) ?? [:]
+        func sumBalanceNMinus2(for patterns: [String]) -> Double {
+            exerciseAccounts
+                .filter { acc in patterns.contains { pattern in acc.accountNumber.hasPrefix(pattern) } }
+                .reduce(0) { total, acc in total + (balanceN2Cache[acc.accountNumber]?.balanceN2 ?? 0) }
+        }
+
+        // Calcul pour les exercices N, N-1 et N-2
         let (sigN, vars) = calculateSigValues(sumBalanceN)
         let (sigNMinus1, varsN1) = calculateSigValues(sumBalanceNMinus1)
-
-        // N-2 = vide pour l'instant (nécessiterait une 3e colonne dans l'import)
-        let sigNMinus2 = SigValues(
-            margeBrute: 0, productionExercice: 0, valeurAjoutee: 0, ebeSig: 0,
-            resultatExploitation: 0, resultatFinancier: 0, resultatCourant: 0, resultatExceptionnel: 0, resultatNet: 0
-        )
+        let (sigNMinus2, _) = calculateSigValues(sumBalanceNMinus2)
 
         print("📊 SIG N: Marge=\(sigN.margeBrute), CA=\(vars.caHT), Coûts=\(vars.coutsDirects)")
         print("📊 SIG N-1: Marge=\(sigNMinus1.margeBrute)")
-        print("📊 SIG N-2: Marge=\(sigNMinus2.margeBrute) (données du fichier non importées)")
+        print("📊 SIG N-2: Marge=\(sigNMinus2.margeBrute) (depuis cache JSON)")
 
         // Créer ou mettre à jour le SIG
         var sig = SoldesIntermedialres(exerciceID: exerciceID)
