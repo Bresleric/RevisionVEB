@@ -107,7 +107,7 @@ final class AccountCycleRule {
 /// Une societe / dossier de revision (ex: PLANB SARL, Moulin Neuf SARL).
 @Model
 final class Dossier {
-    @Attribute(.unique) var id: UUID
+    var id: UUID
     var nom: String
     var ordre: Int
 
@@ -121,7 +121,7 @@ final class Dossier {
 /// Un exercice comptable rattache a un dossier (ex: 2025, cloture au 31/12/2025).
 @Model
 final class Exercice {
-    @Attribute(.unique) var id: UUID
+    var id: UUID
     var dossierID: UUID
     var libelle: String
     var dateCloture: Date
