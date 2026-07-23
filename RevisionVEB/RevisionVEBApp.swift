@@ -42,22 +42,19 @@ struct RevisionVEBApp: App {
             SoldesIntermedialres.self,
         ])
 
-        // Configurer le stockage dans iCloud Drive pour la synchronisation automatique
+        // Configurer le stockage DIRECTEMENT dans iCloud Drive pour vraie synchronisation
         var modelConfiguration: ModelConfiguration
 
-        if FileManager.default.ubiquityIdentityToken != nil {
-            print("📱 Base de données synchronisée via iCloud Drive")
-            modelConfiguration = ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: false,
-                groupContainer: .automatic
-            )
+        if let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) {
+            let dbDir = iCloudURL.appendingPathComponent("RevisionVEB", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dbDir, withIntermediateDirectories: true)
+            let dbURL = dbDir.appendingPathComponent("default.store")
+
+            print("📱 Base de données partagée via iCloud Drive: \(dbURL.path)")
+            modelConfiguration = ModelConfiguration(schema: schema, url: dbURL)
         } else {
             print("⚠️ iCloud Drive non disponible - utilisant stockage local")
-            modelConfiguration = ModelConfiguration(
-                schema: schema,
-                isStoredInMemoryOnly: false
-            )
+            modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
         }
 
         func makeContainer() throws -> ModelContainer {
