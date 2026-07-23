@@ -54,7 +54,11 @@ struct iCloudSync {
         guard let iCloudURL = iCloudDocumentsURL else { return nil }
         do {
             let files = try FileManager.default.contentsOfDirectory(at: iCloudURL, includingPropertiesForKeys: nil)
-            return files.filter { $0.lastPathComponent.contains("RevisionVEB-export") }.sorted { $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? Date(timeIntervalSince1970: 0) > $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate ?? Date(timeIntervalSince1970: 0) }
+            return files.filter { $0.lastPathComponent.contains("RevisionVEB-export") }.sorted { f0, f1 in
+                let date0 = (try? f0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date(timeIntervalSince1970: 0)
+                let date1 = (try? f1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? Date(timeIntervalSince1970: 0)
+                return date0 > date1
+            }
         } catch {
             print("⚠️  Erreur lecture iCloud: \(error)")
             return nil
