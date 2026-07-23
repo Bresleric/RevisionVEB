@@ -43,16 +43,14 @@ struct RevisionVEBApp: App {
         ])
 
         // Configurer le stockage dans iCloud Drive pour la synchronisation automatique
-        let iCloudContainerID = "iCloud.PlanB.RevisionVEB"
         var modelConfiguration: ModelConfiguration
 
-        if let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: iCloudContainerID) {
-            let dbURL = iCloudURL.appendingPathComponent("Data").appendingPathComponent("default.store")
-            print("📱 Base de données synchronisée via iCloud: \(dbURL.path)")
+        if FileManager.default.ubiquityIdentityToken != nil {
+            print("📱 Base de données synchronisée via iCloud Drive")
             modelConfiguration = ModelConfiguration(
                 schema: schema,
-                url: dbURL,
-                isStoredInMemoryOnly: false
+                isStoredInMemoryOnly: false,
+                groupContainer: "iCloud.PlanB.RevisionVEB"
             )
         } else {
             print("⚠️ iCloud Drive non disponible - utilisant stockage local")
