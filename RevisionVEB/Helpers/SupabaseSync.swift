@@ -78,8 +78,6 @@ class SupabaseSync {
     func loadDossiersFromSupabase(to container: ModelContainer) async {
         do {
             let context = ModelContext(container)
-            let existingDossiers = try context.fetch(FetchDescriptor<Dossier>())
-            let existingIds = Set(existingDossiers.map { $0.id })
 
             print("📥 Chargement des dossiers depuis Supabase...")
 
@@ -91,6 +89,21 @@ class SupabaseSync {
 
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
                 if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                    guard !jsonArray.isEmpty else {
+                        print("ℹ️ Aucun dossier dans Supabase")
+                        return
+                    }
+
+                    let existingDossiers = try context.fetch(FetchDescriptor<Dossier>())
+                    let supabaseNoms = Set(jsonArray.compactMap { $0["nom"] as? String })
+
+                    for dossier in existingDossiers {
+                        if supabaseNoms.contains(dossier.nom) {
+                            context.delete(dossier)
+                            print("🗑️ Suppression du doublon local: \(dossier.nom)")
+                        }
+                    }
+
                     var loaded = 0
                     for item in jsonArray {
                         if let idStr = item["id"] as? String,
@@ -98,18 +111,14 @@ class SupabaseSync {
                            let nom = item["nom"] as? String,
                            let ordre = item["ordre"] as? Int {
 
-                            if !existingIds.contains(id) {
-                                let dossier = Dossier(id: id, nom: nom, ordre: ordre)
-                                context.insert(dossier)
-                                print("✅ Dossier chargé: \(nom)")
-                                loaded += 1
-                            }
+                            let dossier = Dossier(id: id, nom: nom, ordre: ordre)
+                            context.insert(dossier)
+                            print("✅ Dossier chargé: \(nom)")
+                            loaded += 1
                         }
                     }
-                    if loaded > 0 {
-                        try context.save()
-                    }
-                    print("📊 \(loaded) nouveaux dossiers, total Supabase: \(jsonArray.count)")
+                    try context.save()
+                    print("📊 \(loaded) dossiers chargés depuis Supabase")
                 }
             }
         } catch {
