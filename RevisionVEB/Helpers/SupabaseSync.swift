@@ -25,7 +25,7 @@ class SupabaseSync {
         return URLSession(configuration: config)
     }
 
-    // MARK: - Dossiers Sync
+    // MARK: - Dossiers Sync (UPSERT)
 
     func syncDossiers(from container: ModelContainer) async {
         do {
@@ -49,6 +49,7 @@ class SupabaseSync {
                 let url = URL(string: "\(baseURL)/rest/v1/dossiers")!
                 var request = URLRequest(url: url)
                 request.httpMethod = "POST"
+                request.setValue("resolution=merge-duplicates", forHTTPHeaderField: "Prefer")
                 request.httpBody = try JSONSerialization.data(withJSONObject: payload)
 
                 do {
@@ -56,6 +57,8 @@ class SupabaseSync {
                     if let httpResponse = response as? HTTPURLResponse {
                         if httpResponse.statusCode == 201 || httpResponse.statusCode == 200 {
                             print("✅ Dossier synced: \(dossier.nom)")
+                        } else if httpResponse.statusCode == 409 {
+                            print("ℹ️ Dossier existe déjà: \(dossier.nom)")
                         } else {
                             let errorMsg = String(data: data, encoding: .utf8) ?? ""
                             print("⚠️ Erreur \(httpResponse.statusCode): \(errorMsg)")
@@ -70,11 +73,55 @@ class SupabaseSync {
         }
     }
 
+    // MARK: - Load from Supabase
+
+    func loadDossiersFromSupabase(to container: ModelContainer) async {
+        do {
+            let context = ModelContext(container)
+
+            // Vérifier si on a déjà des dossiers localement
+            let existingDossiers = try context.fetch(FetchDescriptor<Dossier>())
+            guard existingDossiers.isEmpty else {
+                print("ℹ️ Dossiers locaux existants, pas de chargement depuis Supabase")
+                return
+            }
+
+            print("📥 Chargement des dossiers depuis Supabase...")
+
+            let url = URL(string: "\(baseURL)/rest/v1/dossiers")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+
+            let (data, response) = try await session.data(for: request)
+
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                    for item in jsonArray {
+                        if let idStr = item["id"] as? String,
+                           let id = UUID(uuidString: idStr),
+                           let nom = item["nom"] as? String,
+                           let ordre = item["ordre"] as? Int {
+
+                            let dossier = Dossier(id: id, nom: nom, ordre: ordre)
+                            context.insert(dossier)
+                            print("✅ Dossier chargé: \(nom)")
+                        }
+                    }
+                    try context.save()
+                    print("✅ \(jsonArray.count) dossiers chargés depuis Supabase!")
+                }
+            }
+        } catch {
+            print("⚠️ Erreur chargement Supabase: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Full Sync
 
     func fullSync(from container: ModelContainer) async {
         print("🚀 Début synchronisation Supabase...")
         print("   URL: \(baseURL)")
+        await loadDossiersFromSupabase(to: container)
         await syncDossiers(from: container)
         print("✅ Synchronisation complétée!")
     }
