@@ -37,6 +37,9 @@ class SupabaseSync {
                 return
             }
 
+            // Récupérer les IDs existants dans Supabase
+            let existingIds = await getSupabaseIds()
+
             print("📤 Synchronisation de \(dossiers.count) dossier(s)...")
 
             for dossier in dossiers {
@@ -46,19 +49,23 @@ class SupabaseSync {
                     "ordre": dossier.ordre
                 ]
 
+                let idStr = dossier.id.uuidString
                 let url = URL(string: "\(baseURL)/rest/v1/dossiers")!
                 var request = URLRequest(url: url)
-                request.httpMethod = "POST"
-                request.setValue("resolution=merge-duplicates", forHTTPHeaderField: "Prefer")
                 request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+                if existingIds.contains(idStr) {
+                    request.httpMethod = "PATCH"
+                    request.url = URL(string: "\(baseURL)/rest/v1/dossiers?id=eq.\(idStr)")!
+                } else {
+                    request.httpMethod = "POST"
+                }
 
                 do {
                     let (data, response) = try await session.data(for: request)
                     if let httpResponse = response as? HTTPURLResponse {
-                        if httpResponse.statusCode == 201 || httpResponse.statusCode == 200 {
+                        if httpResponse.statusCode == 201 || httpResponse.statusCode == 200 || httpResponse.statusCode == 204 {
                             print("✅ Dossier synced: \(dossier.nom)")
-                        } else if httpResponse.statusCode == 409 {
-                            print("ℹ️ Dossier existe déjà: \(dossier.nom)")
                         } else {
                             let errorMsg = String(data: data, encoding: .utf8) ?? ""
                             print("⚠️ Erreur \(httpResponse.statusCode): \(errorMsg)")
@@ -71,6 +78,24 @@ class SupabaseSync {
         } catch {
             print("❌ Erreur fetch dossiers: \(error)")
         }
+    }
+
+    private func getSupabaseIds() async -> Set<String> {
+        do {
+            let url = URL(string: "\(baseURL)/rest/v1/dossiers?select=id")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+
+            let (data, response) = try await session.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                    return Set(jsonArray.compactMap { $0["id"] as? String })
+                }
+            }
+        } catch {
+            print("⚠️ Erreur fetch IDs Supabase: \(error.localizedDescription)")
+        }
+        return Set()
     }
 
     // MARK: - Load from Supabase
