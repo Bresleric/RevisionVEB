@@ -43,8 +43,7 @@ struct RevisionVEBApp: App {
         ])
         let modelConfiguration = ModelConfiguration(
             schema: schema,
-            isStoredInMemoryOnly: false,
-            cloudKitDatabase: .private("iCloud.PlanB.RevisionVEB")
+            isStoredInMemoryOnly: false
         )
 
         func makeContainer() throws -> ModelContainer {
