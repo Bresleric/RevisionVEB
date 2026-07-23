@@ -43,6 +43,37 @@ struct RootView: View {
         modelContext.insert(Dossier(nom: "PLANB SARL", ordre: 0))
         modelContext.insert(Dossier(nom: "Moulin Neuf SARL", ordre: 1))
         try? modelContext.save()
+
+        // Corriger les déclarations TVA 2026 importées avec le mauvais exerciceID
+        fixCa3DeclarationsYear()
+    }
+
+    private func fixCa3DeclarationsYear() {
+        do {
+            var descriptor = FetchDescriptor<Exercice>()
+            let allExercices = try modelContext.fetch(descriptor)
+            var ca3Descriptor = FetchDescriptor<Ca3Entry>()
+            let allCa3 = try modelContext.fetch(ca3Descriptor)
+
+            var updated = 0
+            for ca3Entry in allCa3 {
+                let year = ca3Entry.periode.prefix(4)
+                guard year == "2026" else { continue }
+
+                // Chercher l'exercice courant (2025 ou autre)
+                if let currentExercice = allExercices.first(where: { $0.id == ca3Entry.exerciceID }),
+                   let exercice2026 = allExercices.first(where: { $0.dossierID == currentExercice.dossierID && $0.libelle.contains("2026") }) {
+                    ca3Entry.exerciceID = exercice2026.id
+                    updated += 1
+                }
+            }
+            try? modelContext.save()
+            if updated > 0 {
+                print("✅ \(updated) déclarations TVA 2026 corrigées")
+            }
+        } catch {
+            print("⚠️ Erreur lors de la correction: \(error)")
+        }
     }
 }
 
@@ -1990,14 +2021,25 @@ struct TvaControlView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Picker("", selection: $sub) {
-                Text("Taux").tag(0)
-                Text("Collectée").tag(3)
-                Text("Déclarations").tag(1)
-                Text("Cohérence").tag(4)
-                Text("Rapprochement").tag(2)
+            HStack {
+                Picker("", selection: $sub) {
+                    Text("Taux").tag(0)
+                    Text("Collectée").tag(3)
+                    Text("Déclarations").tag(1)
+                    Text("Cohérence").tag(4)
+                    Text("Rapprochement").tag(2)
+                }
+                .pickerStyle(.segmented).frame(width: 640)
+
+                Spacer()
+
+                Button(action: deleteCa32026) {
+                    Image(systemName: "trash")
+                    Text("Supprimer 2026")
+                }
+                .buttonStyle(.bordered)
             }
-            .pickerStyle(.segmented).frame(width: 640).padding()
+            .padding()
 
             Divider()
 
@@ -2146,6 +2188,22 @@ struct TvaControlView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Actions
+
+    private func deleteCa32026() {
+        let entriesToDelete = ca3.filter { $0.exerciceID == exerciceID && $0.periode.hasPrefix("2026") }
+        let periodesToDelete = ca3Periods.filter { $0.exerciceID == exerciceID && $0.periode.hasPrefix("2026") }
+
+        for entry in entriesToDelete {
+            modelContext.delete(entry)
+        }
+        for period in periodesToDelete {
+            modelContext.delete(period)
+        }
+        try? modelContext.save()
+        print("✅ \(entriesToDelete.count) entrées + \(periodesToDelete.count) périodes 2026 supprimées")
     }
 
     // MARK: Sous-vue Déclarations (I-1)
