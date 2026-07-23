@@ -50,7 +50,7 @@ struct RevisionVEBApp: App {
             modelConfiguration = ModelConfiguration(
                 schema: schema,
                 isStoredInMemoryOnly: false,
-                groupContainer: "iCloud.PlanB.RevisionVEB"
+                groupContainer: .automatic
             )
         } else {
             print("⚠️ iCloud Drive non disponible - utilisant stockage local")
