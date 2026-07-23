@@ -50,9 +50,9 @@ struct RootView: View {
 
     private func fixCa3DeclarationsYear() {
         do {
-            var descriptor = FetchDescriptor<Exercice>()
+            let descriptor = FetchDescriptor<Exercice>()
             let allExercices = try modelContext.fetch(descriptor)
-            var ca3Descriptor = FetchDescriptor<Ca3Entry>()
+            let ca3Descriptor = FetchDescriptor<Ca3Entry>()
             let allCa3 = try modelContext.fetch(ca3Descriptor)
 
             var updated = 0
