@@ -14,6 +14,13 @@ struct RevisionVEBApp: App {
         // Instantané de sécurité de la base existante AVANT toute migration.
         DataBackup.autoBackup()
 
+        // Vérifier la disponibilité iCloud AVANT de migrer vers CloudKit
+        let hasICloud = FileManager.default.ubiquityIdentityToken != nil
+        if !hasICloud {
+            print("⚠️  Vous n'êtes pas connecté à iCloud. La synchronisation CloudKit ne fonctionnera pas.")
+            print("    Allez dans Paramètres Système > [Utilisateur] > iCloud pour vous connecter.")
+        }
+
         let schema = Schema([
             Invoice.self,
             AuditResult.self,
@@ -34,7 +41,11 @@ struct RevisionVEBApp: App {
             ImmoAsset.self,
             SoldesIntermedialres.self,
         ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        let modelConfiguration = ModelConfiguration(
+            schema: schema,
+            isStoredInMemoryOnly: false,
+            cloudKitDatabase: .private("iCloud.PlanB.RevisionVEB")
+        )
 
         func makeContainer() throws -> ModelContainer {
             try ModelContainer(for: schema, configurations: [modelConfiguration])
@@ -50,6 +61,8 @@ struct RevisionVEBApp: App {
         }
 
         if let container = try? makeContainer(), isHealthy(container) {
+            // Déclencher la migration CloudKit si nécessaire
+            CloudKitMigration.performMigrationIfNeeded(container: container)
             return container
         }
 
