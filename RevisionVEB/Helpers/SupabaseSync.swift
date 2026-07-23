@@ -1,11 +1,17 @@
 import Foundation
 import SwiftData
 
-actor SupabaseSync {
+@MainActor
+class SupabaseSync {
     static let shared = SupabaseSync()
 
-    private let baseURL = SupabaseConfig.url
-    private let anonKey = SupabaseConfig.anonKey
+    private let baseURL: String
+    private let anonKey: String
+
+    init() {
+        self.baseURL = SupabaseConfig.url
+        self.anonKey = SupabaseConfig.anonKey
+    }
 
     private var session: URLSession {
         let config = URLSessionConfiguration.default
