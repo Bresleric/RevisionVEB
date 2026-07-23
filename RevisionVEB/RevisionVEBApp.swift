@@ -102,6 +102,12 @@ struct RevisionVEBApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
+                .onAppear {
+                    Task {
+                        // Synchroniser avec Supabase au lancement
+                        await SupabaseSync.shared.fullSync(from: sharedModelContainer)
+                    }
+                }
         }
         .modelContainer(sharedModelContainer)
         .commands {
