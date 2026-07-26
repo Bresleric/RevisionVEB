@@ -10,7 +10,7 @@ import SwiftData
 
 @Model
 final class BalanceAccount {
-    var id: UUID
+    @Attribute(.unique) var id: UUID
     var accountNumber: String
     var accountCode: String
     var accountLabel: String
@@ -107,7 +107,7 @@ final class AccountCycleRule {
 /// Une societe / dossier de revision (ex: PLANB SARL, Moulin Neuf SARL).
 @Model
 final class Dossier {
-    var id: UUID
+    @Attribute(.unique) var id: UUID
     var nom: String
     var ordre: Int
 
@@ -121,7 +121,7 @@ final class Dossier {
 /// Un exercice comptable rattache a un dossier (ex: 2025, cloture au 31/12/2025).
 @Model
 final class Exercice {
-    var id: UUID
+    @Attribute(.unique) var id: UUID
     var dossierID: UUID
     var libelle: String
     var dateCloture: Date
@@ -326,7 +326,7 @@ final class TvaCompteTaux {
 /// Une ligne de declaration CA3 : periode + taux + base + TVA collectee.
 @Model
 final class Ca3Entry {
-    var id: UUID = UUID()
+    @Attribute(.unique) var id: UUID = UUID()
     var exerciceID: UUID = UUID()
     var periode: String = ""   // ex: "2025-01"
     var taux: String = ""
@@ -418,7 +418,7 @@ final class BankReconciliation {
 /// Element (ecriture) de rapprochement : libelle + montant signe.
 @Model
 final class ReconItem {
-    var id: UUID
+    @Attribute(.unique) var id: UUID
     var exerciceID: UUID
     var accountNumber: String
     var libelle: String = ""
@@ -448,7 +448,7 @@ final class ReconItem {
 /// Mouvement du grand livre classe 2 (immobilisations) importe de Cegid.
 @Model
 final class Class2Movement {
-    var id: UUID = UUID()
+    @Attribute(.unique) var id: UUID = UUID()
     var exerciceID: UUID = UUID()
     var date: Date = Date()
     var compte: String = ""
@@ -478,7 +478,7 @@ final class Class2Movement {
 /// Facture d'investissement (immobilisation) avec piece liee, par exercice.
 @Model
 final class ImmoInvoice {
-    var id: UUID = UUID()
+    @Attribute(.unique) var id: UUID = UUID()
     var exerciceID: UUID = UUID()
     var date: Date = Date()
     var compte: String = ""        // compte immo concerne (20/21/23/26/27)
@@ -506,7 +506,7 @@ final class ImmoInvoice {
 /// Soldes Intermédiaires de Gestion (SIG) - 8 étapes du compte de résultat.
 @Model
 final class SoldesIntermedialres {
-    var id: UUID = UUID()
+    @Attribute(.unique) var id: UUID = UUID()
     var exerciceID: UUID = UUID()
 
     // Niveau 1 : Marge brute = CA HT - Coûts directs
@@ -606,7 +606,7 @@ final class SoldesIntermedialres {
 /// Bien immobilisé (état d'amortissement depuis le fichier Excel), par exercice et compte.
 @Model
 final class ImmoAsset {
-    var id: UUID = UUID()
+    @Attribute(.unique) var id: UUID = UUID()
     var exerciceID: UUID = UUID()
     var compte: String = ""            // classe 2 (20xxx, 21xxx, 26xxx, 27xxx)
     var numeroImmo: String = ""        // numéro identifiant du bien (ex: "00026")

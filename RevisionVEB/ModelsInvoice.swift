@@ -10,7 +10,7 @@ import SwiftData
 
 @Model
 final class Invoice {
-    var id: UUID
+    @Attribute(.unique) var id: UUID
     var number: String
     var date: Date
     var supplier: String

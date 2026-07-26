@@ -72,7 +72,7 @@ struct RevisionVEBApp: App {
 
         if let container = try? makeContainer(), isHealthy(container) {
             // Déclencher la migration CloudKit si nécessaire
-            CloudKitMigration.performMigrationIfNeeded(container: container)
+            // CloudKitMigration.performMigrationIfNeeded(container: container)
             return container
         }
 
@@ -104,8 +104,9 @@ struct RevisionVEBApp: App {
             RootView()
                 .onAppear {
                     Task {
-                        // Synchroniser avec Supabase au lancement
+                        print("🔄 Synchronisation Supabase")
                         await SupabaseSync.shared.fullSync(from: sharedModelContainer)
+                        print("✅ Synchronisation réussie")
                     }
                 }
         }

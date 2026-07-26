@@ -39,7 +39,15 @@
       "Bash(git commit -m 'debug\\(cycle A\\): Ajouter logs pour déboguer le calcul de Résultat courant *)",
       "Bash(git commit -m 'debug\\(cycle A\\): Ajouter logs additionnels pour vérifier l'\\\\''assignation de Résultat courant *)",
       "Bash(git commit -m 'fix\\(cycle A\\): Augmenter largeur des colonnes SIG et nettoyer logs debug *)",
-      "Bash(git commit -m 'feat\\(cycle A\\): Ajouter détails N-1 au tableau SIG *)"
+      "Bash(git commit -m 'feat\\(cycle A\\): Ajouter détails N-1 au tableau SIG *)",
+      "Bash(mv \"/Users/eric/Library/Containers/PlanB.RevisionVEB/Data/Library/Application Support/default.store\"* \"/Users/eric/Library/Containers/PlanB.RevisionVEB/Data/Library/Application Support/Backups/current-broken/\")",
+      "Bash(mkdir -p \"/Users/eric/Library/Containers/PlanB.RevisionVEB/Data/Library/Application Support/Backups/current-broken\")",
+      "Bash(cp \"/Users/eric/Library/Containers/PlanB.RevisionVEB/Data/Library/Application Support/Backups/auto-20260710-150111/default.store\"* \"/Users/eric/Library/Containers/PlanB.RevisionVEB/Data/Library/Application Support/\")",
+      "Bash(swift test_cache.swift)",
+      "Bash(find ~/Documents -name \"balance-*.json\" 2>/dev/null)",
+      "Bash(git commit *)",
+      "mcp__supabase-planb__execute_sql",
+      "Bash(curl -s -X GET https://qhvtqapasxekkumuztak.supabase.co/rest/v1/dossiers?select=id,nom -H 'Authorization: Bearer sb_publishable_A-zsYR2RK22umw_cU4loBA_ES2W8Fjr' -H 'apikey: sb_publishable_A-zsYR2RK22umw_cU4loBA_ES2W8Fjr')"
     ]
   }
 }

@@ -10,7 +10,7 @@ import SwiftData
 
 @Model
 final class AuditResult {
-    var id: UUID
+    @Attribute(.unique) var id: UUID
     var ruleId: String
     var ruleName: String
     var invoiceId: UUID?

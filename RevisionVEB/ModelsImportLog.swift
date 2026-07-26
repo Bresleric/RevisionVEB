@@ -10,7 +10,7 @@ import SwiftData
 
 @Model
 final class ImportLog {
-    var id: UUID
+    @Attribute(.unique) var id: UUID
     var fileName: String
     var fileType: FileType
     var status: ImportStatus
