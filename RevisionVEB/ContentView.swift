@@ -198,6 +198,21 @@ struct SidebarView: View {
                     Label("Sauvegarder les données…", systemImage: "externaldrive.badge.timemachine")
                 }
             }
+
+            Section {
+                Button(role: .destructive) {
+                    Task {
+                        print("💾 Synchronisation avant fermeture...")
+                        try? modelContext.save()
+                        print("✅ Données sauvegardées")
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                            NSApplication.shared.terminate(nil)
+                        }
+                    }
+                } label: {
+                    Label("Quitter l'application", systemImage: "door.left.hand.open")
+                }
+            }
         }
         .navigationTitle("PLANB Audit")
         .navigationSplitViewColumnWidth(min: 220, ideal: 260)
