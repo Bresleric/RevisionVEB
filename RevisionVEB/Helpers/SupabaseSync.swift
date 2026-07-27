@@ -740,6 +740,15 @@ class SupabaseSync {
         // PHASE 1: Charger TOUT avec un SEUL context
         let context = ModelContext(container)
 
+        // ÉTAPE 1: ENVOYER les données locales vers Supabase (d'abord!)
+        print("\n📤 ÉTAPE 1: Envoi données locales → Supabase")
+        await syncDossiers(from: container)
+        await syncExercices(from: container)
+        await syncBalanceAccounts(from: container)
+        await syncSoldesIntermediales(from: container)
+
+        // ÉTAPE 2: CHARGER depuis Supabase (pour les autres Macs)
+        print("\n📥 ÉTAPE 2: Chargement Supabase → local")
         await loadAllFromSupabase(using: context)
 
         print("\n✅ Synchronisation complétée!")
