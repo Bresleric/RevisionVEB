@@ -322,10 +322,23 @@ class SupabaseSync {
                     }
 
                     var loaded = 0
-                    for item in jsonArray {
-                        guard let idStr = item["id"] as? String,
-                              let id = UUID(uuidString: idStr),
-                              let nom = item["nom"] as? String else { continue }
+                    var failed = 0
+                    for (idx, item) in jsonArray.enumerated() {
+                        guard let idStr = item["id"] as? String else {
+                            print("  ✗ Item \(idx): pas d'id")
+                            failed += 1
+                            continue
+                        }
+                        guard let id = UUID(uuidString: idStr) else {
+                            print("  ✗ Item \(idx): UUID invalide '\(idStr)'")
+                            failed += 1
+                            continue
+                        }
+                        guard let nom = item["nom"] as? String else {
+                            print("  ✗ Item \(idx): pas de nom")
+                            failed += 1
+                            continue
+                        }
 
                         // Passer si déjà local
                         if localIds.contains(id) {
@@ -334,7 +347,7 @@ class SupabaseSync {
                         }
 
                         let ordre = item["ordre"] as? Int ?? 0
-                        print("    + \(nom) (\(id))")
+                        print("  ✅ + \(nom)")
                         let dossier = Dossier(id: id, nom: nom, ordre: ordre)
                         context.insert(dossier)
                         loaded += 1
@@ -363,48 +376,43 @@ class SupabaseSync {
             let (data, response) = try await session.data(for: request)
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
                 if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                    print("  JSON reçu: \(jsonArray.count) exercices")
                     guard !jsonArray.isEmpty else { return }
 
-                    // Charger les IDs locaux
-                    var localIds = Set<UUID>()
-                    do {
-                        let locals = try context.fetch(FetchDescriptor<Exercice>())
-                        localIds = Set(locals.map { $0.id })
-                    } catch {
-                        print("⚠️ Erreur lecture exercices locaux: \(error)")
-                    }
-
                     var loaded = 0
-                    var skipped = 0
-                    for item in jsonArray {
+                    for (idx, item) in jsonArray.enumerated() {
                         guard let idStr = item["id"] as? String,
-                              let id = UUID(uuidString: idStr),
-                              let dossierIdStr = item["dossier_id"] as? String,
-                              let dossierId = UUID(uuidString: dossierIdStr),
-                              let libelle = item["libelle"] as? String else {
-                            skipped += 1
+                              let id = UUID(uuidString: idStr) else {
+                            print("    ✗ Item \(idx): UUID invalide")
                             continue
                         }
-
-                        if localIds.contains(id) {
+                        guard let dossierIdStr = item["dossier_id"] as? String,
+                              let dossierId = UUID(uuidString: dossierIdStr) else {
+                            print("    ✗ Item \(idx): dossier_id invalide")
+                            continue
+                        }
+                        guard let libelle = item["libelle"] as? String else {
+                            print("    ✗ Item \(idx): libelle manquant")
                             continue
                         }
 
                         let dateCloture = (item["date_cloture"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
                         let creeLe = (item["cree_le"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
 
+                        print("    ✅ \(libelle)")
                         let exercice = Exercice(id: id, dossierID: dossierId, libelle: libelle, dateCloture: dateCloture, creeLe: creeLe)
                         context.insert(exercice)
                         loaded += 1
                     }
                     if loaded > 0 {
+                        print("  Sauvegarde \(loaded) exercices...")
                         try context.save()
                     }
-                    print("✅ \(loaded) exercices chargés (+ \(localIds.count) déjà locaux, \(skipped) ignorés)")
+                    print("✅ \(loaded) exercices chargés")
                 }
             }
         } catch {
-            print("⚠️ Erreur chargement exercices: \(error.localizedDescription)")
+            print("❌ Erreur chargement exercices: \(error)")
         }
     }
 
@@ -729,30 +737,118 @@ class SupabaseSync {
         print("🚀 Début synchronisation Supabase...")
         print("   URL: \(baseURL)")
 
-        // Check if local database is empty
+        // PHASE 1: Charger TOUT avec un SEUL context
         let context = ModelContext(container)
-        let localDossiers = (try? context.fetch(FetchDescriptor<Dossier>())) ?? []
-        let isFirstSync = localDossiers.isEmpty
 
-        if isFirstSync {
-            print("   Phase 1: Chargement depuis Supabase (base vide)...\n")
-            // PHASE 1: Charger les données depuis Supabase
-            await loadDossiersFromSupabase(to: container)
-            await loadExercicesFromSupabase(to: container)
-            await loadBalanceAccountsFromSupabase(to: container)
-            await loadImmoAssetsFromSupabase(to: container)
-            await loadSoldesIntermedialresFromSupabase(to: container)
-        }
-
-        print("   Phase 2: Synchronisation des données locales...\n")
-
-        // PHASE 2: Envoyer les données locales vers Supabase
-        await syncDossiers(from: container)
-        await syncExercices(from: container)
-        await syncBalanceAccounts(from: container)
-        await syncImmoAssets(from: container)
-        await syncSoldesIntermediales(from: container)
+        await loadAllFromSupabase(using: context)
 
         print("\n✅ Synchronisation complétée!")
+    }
+
+    private func loadAllFromSupabase(using context: ModelContext) async {
+        print("📥 Chargement depuis Supabase...")
+
+        // Vider les tables locales pour éviter les doublons
+        do {
+            try context.delete(model: Dossier.self)
+            try context.delete(model: Exercice.self)
+            try context.delete(model: BalanceAccount.self)
+            try context.save()
+            print("  Tables vidées")
+        } catch {
+            print("  ⚠️  Erreur vidage tables: \(error)")
+        }
+
+        // 1. DOSSIERS
+        do {
+            let url = URL(string: "\(baseURL)/rest/v1/dossiers")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            let (data, response) = try await session.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
+               let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                print("  Dossiers: \(jsonArray.count) trouvés")
+                for item in jsonArray {
+                    guard let idStr = item["id"] as? String,
+                          let id = UUID(uuidString: idStr),
+                          let nom = item["nom"] as? String else { continue }
+                    let dossier = Dossier(id: id, nom: nom, ordre: item["ordre"] as? Int ?? 0)
+                    context.insert(dossier)
+                    print("    ✅ \(nom)")
+                }
+            }
+        } catch {
+            print("  ❌ Erreur dossiers: \(error)")
+        }
+
+        // 2. EXERCICES
+        do {
+            let url = URL(string: "\(baseURL)/rest/v1/exercices")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            let (data, response) = try await session.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
+               let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                print("  Exercices: \(jsonArray.count) trouvés")
+                for item in jsonArray {
+                    guard let idStr = item["id"] as? String,
+                          let id = UUID(uuidString: idStr),
+                          let dossierIdStr = item["dossier_id"] as? String,
+                          let dossierId = UUID(uuidString: dossierIdStr),
+                          let libelle = item["libelle"] as? String else { continue }
+                    let dateCloture = (item["date_cloture"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+                    let creeLe = (item["cree_le"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+                    let exercice = Exercice(id: id, dossierID: dossierId, libelle: libelle, dateCloture: dateCloture, creeLe: creeLe)
+                    context.insert(exercice)
+                    print("    ✅ \(libelle)")
+                }
+            }
+        } catch {
+            print("  ❌ Erreur exercices: \(error)")
+        }
+
+        // 3. BALANCE ACCOUNTS
+        do {
+            let url = URL(string: "\(baseURL)/rest/v1/balance_accounts")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            let (data, response) = try await session.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
+               let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                print("  Balance Accounts: \(jsonArray.count) trouvés")
+                for item in jsonArray {
+                    guard let idStr = item["id"] as? String,
+                          let id = UUID(uuidString: idStr),
+                          let accountNumber = item["account_number"] as? String,
+                          let exerciceIdStr = item["exercice_id"] as? String,
+                          let exerciceId = UUID(uuidString: exerciceIdStr) else { continue }
+                    let debit = (item["debit"] as? NSNumber)?.doubleValue ?? 0.0
+                    let credit = (item["credit"] as? NSNumber)?.doubleValue ?? 0.0
+                    let restaurant = Restaurant(rawValue: item["restaurant"] as? String ?? "Freddy") ?? .freddy
+                    let account = BalanceAccount(
+                        id: id, accountNumber: accountNumber, accountCode: item["account_code"] as? String ?? "",
+                        accountLabel: item["account_label"] as? String ?? "", debit: debit, credit: credit,
+                        balanceN: (item["balance_n"] as? NSNumber)?.doubleValue ?? 0.0,
+                        balanceNMinus1: (item["balance_n_minus_1"] as? NSNumber)?.doubleValue ?? 0.0,
+                        restaurant: restaurant, exerciceID: exerciceId,
+                        sourceFile: item["source_file"] as? String ?? "",
+                        importDate: (item["import_date"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+                    )
+                    context.insert(account)
+                }
+                print("    ✅ \(jsonArray.count) chargés")
+            }
+        } catch {
+            print("  ❌ Erreur balance_accounts: \(error)")
+        }
+
+        // Sauvegarde unique
+        print("\n💾 Sauvegarde...")
+        do {
+            try context.save()
+            print("✅ Toutes données sauvegardées")
+        } catch {
+            print("❌ Erreur sauvegarde: \(error)")
+        }
     }
 }

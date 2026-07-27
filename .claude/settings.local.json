@@ -47,7 +47,9 @@
       "Bash(find ~/Documents -name \"balance-*.json\" 2>/dev/null)",
       "Bash(git commit *)",
       "mcp__supabase-planb__execute_sql",
-      "Bash(curl -s -X GET https://qhvtqapasxekkumuztak.supabase.co/rest/v1/dossiers?select=id,nom -H 'Authorization: Bearer sb_publishable_A-zsYR2RK22umw_cU4loBA_ES2W8Fjr' -H 'apikey: sb_publishable_A-zsYR2RK22umw_cU4loBA_ES2W8Fjr')"
+      "Bash(curl -s -X GET https://qhvtqapasxekkumuztak.supabase.co/rest/v1/dossiers?select=id,nom -H 'Authorization: Bearer sb_publishable_A-zsYR2RK22umw_cU4loBA_ES2W8Fjr' -H 'apikey: sb_publishable_A-zsYR2RK22umw_cU4loBA_ES2W8Fjr')",
+      "Bash(curl -s -X GET https://qhvtqapasxekkumuztak.supabase.co/rest/v1/dossiers?select=id,nom,ordre -H 'Authorization: Bearer sb_publishable_A-zsYR2RK22umw_cU4loBA_ES2W8Fjr' -H 'apikey: sb_publishable_A-zsYR2RK22umw_cU4loBA_ES2W8Fjr')",
+      "Bash(curl -s -X DELETE https://qhvtqapasxekkumuztak.supabase.co/rest/v1/dossiers?id=eq.766dd68f-0d62-4b43-8ed6-0cd47685a5c0 -H 'Authorization: Bearer sb_publishable_A-zsYR2RK22umw_cU4loBA_ES2W8Fjr' -H 'apikey: sb_publishable_A-zsYR2RK22umw_cU4loBA_ES2W8Fjr' -w . -o /dev/null)"
     ]
   }
 }
