@@ -748,13 +748,27 @@ class SupabaseSync {
     private func loadAllFromSupabase(using context: ModelContext) async {
         print("📥 Chargement depuis Supabase...")
 
-        // Vider les tables locales pour éviter les doublons
+        // SAUVEGARDE: Récupérer les contrôles AVANT vidage
+        var savedJustifications: [AccountJustification] = []
+        var savedTva: [TvaCompteTaux] = []
+        var savedControlStates: [ControlState] = []
+
+        do {
+            savedJustifications = try context.fetch(FetchDescriptor<AccountJustification>())
+            savedTva = try context.fetch(FetchDescriptor<TvaCompteTaux>())
+            savedControlStates = try context.fetch(FetchDescriptor<ControlState>())
+            print("  ✅ Sauvegarde: \(savedJustifications.count) justifications, \(savedTva.count) TVA, \(savedControlStates.count) contrôles")
+        } catch {
+            print("  ⚠️  Erreur sauvegarde: \(error)")
+        }
+
+        // Vider les tables de DATA (pas les contrôles)
         do {
             try context.delete(model: Dossier.self)
             try context.delete(model: Exercice.self)
             try context.delete(model: BalanceAccount.self)
             try context.save()
-            print("  Tables vidées")
+            print("  Tables de données vidées")
         } catch {
             print("  ⚠️  Erreur vidage tables: \(error)")
         }
@@ -842,13 +856,34 @@ class SupabaseSync {
             print("  ❌ Erreur balance_accounts: \(error)")
         }
 
-        // Sauvegarde unique
-        print("\n💾 Sauvegarde...")
+        // Sauvegarde unique des données Supabase
+        print("\n💾 Sauvegarde données Supabase...")
         do {
             try context.save()
-            print("✅ Toutes données sauvegardées")
+            print("✅ Données Supabase sauvegardées")
         } catch {
             print("❌ Erreur sauvegarde: \(error)")
+        }
+
+        // RESTAURATION: Réinsérer les contrôles sauvegardés
+        print("\n📥 Restauration des contrôles...")
+        for justif in savedJustifications {
+            context.insert(justif)
+        }
+        for tva in savedTva {
+            context.insert(tva)
+        }
+        for control in savedControlStates {
+            context.insert(control)
+        }
+
+        if !savedJustifications.isEmpty || !savedTva.isEmpty || !savedControlStates.isEmpty {
+            do {
+                try context.save()
+                print("✅ Contrôles restaurés: \(savedJustifications.count) justifications, \(savedTva.count) TVA, \(savedControlStates.count) contrôles")
+            } catch {
+                print("❌ Erreur restauration: \(error)")
+            }
         }
     }
 }

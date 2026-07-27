@@ -104,7 +104,7 @@ struct RevisionVEBApp: App {
             RootView()
                 .onAppear {
                     Task {
-                        print("🔄 Synchronisation Supabase")
+                        print("🔄 Synchronisation Supabase (sans perdre les justifications)")
                         await SupabaseSync.shared.fullSync(from: sharedModelContainer)
                         print("✅ Synchronisation réussie")
                     }
