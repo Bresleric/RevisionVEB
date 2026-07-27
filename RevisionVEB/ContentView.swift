@@ -1471,7 +1471,10 @@ struct SigView: View {
             ("– Charges exceptionnelles", sig.chargesExceptionnels, sig.chargesExceptionnelsN1, sumN2(for: ["671", "672", "673", "674", "675"]), false, nil),
             ("= Résultat exceptionnel", sig.resultatExceptionnel, sig.resultatExceptionnelN1, sig.resultatExceptionnelN2, true, nil),
 
-            // ÉTAPE 7 : RÉSULTAT NET
+            // ÉTAPE 7 : IMPÔT SUR LES BÉNÉFICES
+            ("– Impôt sur les bénéfices", sig.impotSurBenefices, sig.impotSurBeneficesN1, sig.impotSurBeneficesN2, false, nil),
+
+            // ÉTAPE 8 : RÉSULTAT NET
             ("= RÉSULTAT NET", sig.resultatNet, sig.resultatNetN1, sig.resultatNetN2, true, "green"),
         ]
     }
@@ -1585,7 +1588,7 @@ enum SigCalculator {
         // Calcul pour les exercices N, N-1 et N-2
         let (sigN, vars) = calculateSigValues(sumBalanceN)
         let (sigNMinus1, varsN1) = calculateSigValues(sumBalanceNMinus1)
-        let (sigNMinus2, _) = calculateSigValues(sumBalanceNMinus2)
+        let (sigNMinus2, varsN2) = calculateSigValues(sumBalanceNMinus2)
 
         print("📊 SIG N: Marge=\(sigN.margeBrute), CA=\(vars.caHT), Coûts=\(vars.coutsDirects)")
         print("📊 SIG N-1: Marge=\(sigNMinus1.margeBrute)")
@@ -1644,6 +1647,8 @@ enum SigCalculator {
         sig.produitsExceptionnels = vars.produitsExceptionnels
         sig.chargesExceptionnels = vars.chargesExceptionnels
         sig.impotSurBenefices = vars.impotSurBenefices
+        sig.impotSurBeneficesN1 = varsN1.impotSurBenefices
+        sig.impotSurBeneficesN2 = varsN2.impotSurBenefices
 
         // Assignation N-1
         sig.caHTN1 = varsN1.caHT
@@ -1706,8 +1711,11 @@ enum SigCalculator {
         let chargesExceptionnels = sumBalance(["671", "672", "673", "674", "675"])
         let resultatExceptionnel = produitsExceptionnels - chargesExceptionnels
 
-        // ÉTAPE 7 : RÉSULTAT NET = Résultat courant + Résultat exceptionnel
-        let resultatNet = resultatCourant + resultatExceptionnel
+        // ÉTAPE 6.5 : IMPÔT SUR LES BÉNÉFICES
+        let impotSurBenefices = sumBalance(["695"])
+
+        // ÉTAPE 7 : RÉSULTAT NET = Résultat courant + Résultat exceptionnel - Impôt
+        let resultatNet = resultatCourant + resultatExceptionnel - impotSurBenefices
 
         let sig = SigValues(
             margeBrute: margeBrute,
@@ -1741,7 +1749,7 @@ enum SigCalculator {
             chargesFinancieres: chargesFinancieres,
             produitsExceptionnels: produitsExceptionnels,
             chargesExceptionnels: chargesExceptionnels,
-            impotSurBenefices: 0
+            impotSurBenefices: impotSurBenefices
         )
 
         return (sig, vars)

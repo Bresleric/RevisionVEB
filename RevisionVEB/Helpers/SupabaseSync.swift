@@ -800,25 +800,66 @@ class SupabaseSync {
             let url = URL(string: "\(baseURL)/rest/v1/exercices")!
             var request = URLRequest(url: url)
             request.httpMethod = "GET"
+            print("  📡 Appel API exercices...")
             let (data, response) = try await session.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
-               let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                print("  Exercices: \(jsonArray.count) trouvés")
-                for item in jsonArray {
-                    guard let idStr = item["id"] as? String,
-                          let id = UUID(uuidString: idStr),
-                          let dossierIdStr = item["dossier_id"] as? String,
-                          let dossierId = UUID(uuidString: dossierIdStr),
-                          let libelle = item["libelle"] as? String else { continue }
-                    let dateCloture = (item["date_cloture"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
-                    let creeLe = (item["cree_le"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
-                    let exercice = Exercice(id: id, dossierID: dossierId, libelle: libelle, dateCloture: dateCloture, creeLe: creeLe)
-                    context.insert(exercice)
-                    print("    ✅ \(libelle)")
+            print("  📊 Réponse reçue")
+
+            if let httpResponse = response as? HTTPURLResponse {
+                print("    HTTP Status: \(httpResponse.statusCode)")
+                if httpResponse.statusCode == 200 {
+                    if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                        print("  ✅ JSON parsé: \(jsonArray.count) exercices")
+
+                        var loaded = 0
+                        var failed = 0
+
+                        for (idx, item) in jsonArray.enumerated() {
+                            print("    Item \(idx): \(item.keys.joined(separator: ", "))")
+
+                            guard let idStr = item["id"] as? String else {
+                                print("      ✗ Pas d'ID")
+                                failed += 1
+                                continue
+                            }
+                            guard let id = UUID(uuidString: idStr) else {
+                                print("      ✗ ID invalide: \(idStr)")
+                                failed += 1
+                                continue
+                            }
+                            guard let dossierIdStr = item["dossier_id"] as? String else {
+                                print("      ✗ Pas de dossier_id")
+                                failed += 1
+                                continue
+                            }
+                            guard let dossierId = UUID(uuidString: dossierIdStr) else {
+                                print("      ✗ dossier_id invalide")
+                                failed += 1
+                                continue
+                            }
+                            guard let libelle = item["libelle"] as? String else {
+                                print("      ✗ Pas de libelle")
+                                failed += 1
+                                continue
+                            }
+
+                            let dateCloture = (item["date_cloture"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+                            let creeLe = (item["cree_le"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+                            let exercice = Exercice(id: id, dossierID: dossierId, libelle: libelle, dateCloture: dateCloture, creeLe: creeLe)
+                            context.insert(exercice)
+                            loaded += 1
+                            print("      ✅ \(libelle)")
+                        }
+                        print("  📊 Exercices: \(loaded) insérés, \(failed) échoués")
+                    } else {
+                        print("  ✗ JSON non parsable")
+                    }
+                } else {
+                    print("    ✗ HTTP Error: \(httpResponse.statusCode)")
                 }
             }
         } catch {
             print("  ❌ Erreur exercices: \(error)")
+            print("     \(error.localizedDescription)")
         }
 
         // 3. BALANCE ACCOUNTS

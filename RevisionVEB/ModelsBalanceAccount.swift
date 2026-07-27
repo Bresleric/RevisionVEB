@@ -579,6 +579,8 @@ final class SoldesIntermedialres {
     var produitsExceptionnels: Double = 0  // 77x
     var chargesExceptionnels: Double = 0   // 67x
     var impotSurBenefices: Double = 0
+    var impotSurBeneficesN1: Double = 0
+    var impotSurBeneficesN2: Double = 0
 
     // Variantes N-1 pour les détails
     var caHTN1: Double = 0
