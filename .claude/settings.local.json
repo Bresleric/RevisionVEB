@@ -54,7 +54,9 @@
       "Bash(echo \"\")",
       "Bash(echo \"AccountJustification \\(justifications bancaires\\):\")",
       "Bash(sqlite3 '/Users/eric/Library/Containers/PlanB.RevisionVEB/Data/Library/Application Support/default.store' 'SELECT COUNT\\(*\\) FROM ZACCOUNTJUSTIFICATION;')",
-      "Bash(echo \"TvaCompteTaux \\(TVA\\):\")"
+      "Bash(echo \"TvaCompteTaux \\(TVA\\):\")",
+      "Bash(xcodebuild -scheme RevisionVEB -configuration Debug)",
+      "Bash(pkill -f \"RevisionVEB.app/Contents/MacOS/RevisionVEB\")"
     ]
   }
 }

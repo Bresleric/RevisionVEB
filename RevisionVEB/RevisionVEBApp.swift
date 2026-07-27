@@ -14,13 +14,6 @@ struct RevisionVEBApp: App {
         // Instantané de sécurité de la base existante AVANT toute migration.
         DataBackup.autoBackup()
 
-        // Vérifier la disponibilité iCloud AVANT de migrer vers CloudKit
-        let hasICloud = FileManager.default.ubiquityIdentityToken != nil
-        if !hasICloud {
-            print("⚠️  Vous n'êtes pas connecté à iCloud. La synchronisation CloudKit ne fonctionnera pas.")
-            print("    Allez dans Paramètres Système > [Utilisateur] > iCloud pour vous connecter.")
-        }
-
         let schema = Schema([
             Invoice.self,
             AuditResult.self,
@@ -42,20 +35,10 @@ struct RevisionVEBApp: App {
             SoldesIntermedialres.self,
         ])
 
-        // Configurer le stockage DIRECTEMENT dans iCloud Drive pour vraie synchronisation
-        var modelConfiguration: ModelConfiguration
-
-        if let iCloudURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) {
-            let dbDir = iCloudURL.appendingPathComponent("RevisionVEB", isDirectory: true)
-            try? FileManager.default.createDirectory(at: dbDir, withIntermediateDirectories: true)
-            let dbURL = dbDir.appendingPathComponent("default.store")
-
-            print("📱 Base de données partagée via iCloud Drive: \(dbURL.path)")
-            modelConfiguration = ModelConfiguration(schema: schema, url: dbURL)
-        } else {
-            print("⚠️ iCloud Drive non disponible - utilisant stockage local")
-            modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
-        }
+        // Supabase est la source de vérité. SwiftData = cache local synchronisé.
+        print("📊 Source de vérité: Supabase")
+        print("💾 Cache local: SwiftData")
+        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
         func makeContainer() throws -> ModelContainer {
             try ModelContainer(for: schema, configurations: [modelConfiguration])
