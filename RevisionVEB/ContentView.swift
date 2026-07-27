@@ -1546,16 +1546,13 @@ struct SigView: View {
     }
 
     private func calculateSigIfNeeded() {
-        // Si SIG existe déjà, ne rien faire
-        if sig != nil { return }
-
         // Récupérer les comptes de l'exercice
         let exerciseAccounts = allAccounts.filter { $0.exerciceID == exerciceID }
         guard !exerciseAccounts.isEmpty else { return }
 
-        // Calculer automatiquement les SIG
+        // Toujours recalculer les SIG pour appliquer les mises à jour de formule (ex: IS déduction)
         SigCalculator.calculateAndStore(exerciceID: exerciceID, from: exerciseAccounts, in: modelContext)
-        print("📊 SIG calculés automatiquement depuis le Cycle A (exerciceID: \(exerciceID))")
+        print("📊 SIG recalculés depuis le Cycle A (exerciceID: \(exerciceID))")
         print("📊 Comptes N: \(exerciseAccounts.count), avec N-1 data: \(exerciseAccounts.filter { $0.balanceNMinus1 != 0 }.count)")
     }
 }
