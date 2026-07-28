@@ -163,6 +163,135 @@ class SupabaseSync {
         }
     }
 
+    // MARK: - Points en suspens
+
+    /// Envoie les points en suspens locaux vers Supabase.
+    func syncPendingItems(from container: ModelContainer) async {
+        do {
+            let context = ModelContext(container)
+            let items = try context.fetch(FetchDescriptor<PendingItem>())
+            guard !items.isEmpty else { return }
+
+            print("📤 Points en suspens: \(items.count)")
+            let existingIds = await getTableIds(tableName: "points_en_suspens")
+
+            for p in items {
+                var payload: [String: Any] = [
+                    "id": p.id.uuidString,
+                    "exercice_id": p.exerciceID.uuidString,
+                    "cycle_raw": p.cycleRaw,
+                    "titre": p.titre,
+                    "detail": p.detail,
+                    "type_raw": p.typeRaw,
+                    "statut_raw": p.statutRaw,
+                    "priorite_raw": p.prioriteRaw,
+                    "responsable": p.responsable,
+                    "cree_le": p.creeLe.ISO8601Format(),
+                    "updated_at": p.updatedAt.ISO8601Format()
+                ]
+                payload["echeance"] = p.echeance?.ISO8601Format() ?? NSNull()
+
+                await upsertRecord(tableName: "points_en_suspens", record: payload,
+                                   id: p.id.uuidString, existingIds: existingIds)
+            }
+        } catch {
+            print("❌ Erreur points en suspens: \(error)")
+        }
+    }
+
+    /// Charge les points en suspens depuis Supabase. Fusion par id : le plus
+    /// récemment modifié (updated_at) gagne, pour que les deux Macs convergent.
+    func loadPendingItemsFromSupabase(using context: ModelContext) async {
+        do {
+            let url = URL(string: "\(baseURL)/rest/v1/points_en_suspens")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+
+            let (data, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return }
+            guard http.statusCode == 200 else {
+                if http.statusCode == 404 {
+                    print("  ℹ️ Table points_en_suspens absente sur Supabase (module local uniquement)")
+                } else {
+                    print("  ⚠️ Points en suspens: HTTP \(http.statusCode)")
+                }
+                return
+            }
+            guard let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return }
+
+            let locals = (try? context.fetch(FetchDescriptor<PendingItem>())) ?? []
+            var byID = Dictionary(locals.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+            var inserted = 0
+            var updated = 0
+
+            for row in jsonArray {
+                guard let idStr = row["id"] as? String,
+                      let id = UUID(uuidString: idStr),
+                      let exerciceIdStr = row["exercice_id"] as? String,
+                      let exerciceId = UUID(uuidString: exerciceIdStr),
+                      let cycleRaw = row["cycle_raw"] as? String else { continue }
+
+                let remoteUpdated = (row["updated_at"] as? String)
+                    .flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date.distantPast
+
+                let target: PendingItem
+                if let local = byID[id] {
+                    // La version locale est plus récente : elle sera repoussée au
+                    // prochain envoi, on ne l'écrase pas.
+                    guard remoteUpdated > local.updatedAt else { continue }
+                    target = local
+                    updated += 1
+                } else {
+                    let fresh = PendingItem(exerciceID: exerciceId, cycleRaw: cycleRaw)
+                    fresh.id = id
+                    context.insert(fresh)
+                    byID[id] = fresh
+                    target = fresh
+                    inserted += 1
+                }
+
+                target.exerciceID = exerciceId
+                target.cycleRaw = cycleRaw
+                target.titre = row["titre"] as? String ?? ""
+                target.detail = row["detail"] as? String ?? ""
+                target.typeRaw = row["type_raw"] as? String ?? PendingKind.commentaire.rawValue
+                target.statutRaw = row["statut_raw"] as? String ?? PendingStatus.ouvert.rawValue
+                target.prioriteRaw = row["priorite_raw"] as? String ?? PendingPriority.normale.rawValue
+                target.responsable = row["responsable"] as? String ?? ""
+                target.echeance = (row["echeance"] as? String)
+                    .flatMap { ISO8601DateFormatter().date(from: $0) }
+                target.creeLe = (row["cree_le"] as? String)
+                    .flatMap { ISO8601DateFormatter().date(from: $0) } ?? target.creeLe
+                target.updatedAt = remoteUpdated
+            }
+
+            if inserted > 0 || updated > 0 {
+                try context.save()
+            }
+            print("  ✅ Points en suspens: \(inserted) ajoutés, \(updated) mis à jour")
+        } catch {
+            print("  ⚠️ Erreur chargement points_en_suspens: \(error.localizedDescription)")
+        }
+    }
+
+    /// Supprime un point en suspens sur Supabase (appelé après suppression locale)
+    /// afin qu'il ne réapparaisse pas à la synchronisation suivante.
+    func deletePendingItemRemote(id: UUID) async {
+        do {
+            let url = URL(string: "\(baseURL)/rest/v1/points_en_suspens?id=eq.\(id.uuidString)")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "DELETE"
+            let (_, response) = try await session.data(for: request)
+            if let http = response as? HTTPURLResponse,
+               ![200, 204, 404].contains(http.statusCode) {
+                print("⚠️ Suppression point en suspens: HTTP \(http.statusCode)")
+            }
+        } catch {
+            print("⚠️ Suppression point en suspens: \(error.localizedDescription)")
+        }
+    }
+
     func syncSoldesIntermediales(from container: ModelContainer) async {
         do {
             let context = ModelContext(container)
@@ -268,7 +397,7 @@ class SupabaseSync {
 
             let (_, response) = try await session.data(for: request)
             if let httpResponse = response as? HTTPURLResponse {
-                if ![200, 201, 204].contains(httpResponse.statusCode) {
+                if ![200, 201, 204, 409].contains(httpResponse.statusCode) {
                     print("⚠️ Erreur \(tableName): \(httpResponse.statusCode)")
                 }
             }
@@ -746,6 +875,7 @@ class SupabaseSync {
         await syncExercices(from: container)
         await syncBalanceAccounts(from: container)
         await syncSoldesIntermediales(from: container)
+        await syncPendingItems(from: container)
 
         // ÉTAPE 2: CHARGER depuis Supabase (pour les autres Macs)
         print("\n📥 ÉTAPE 2: Chargement Supabase → local")
@@ -905,6 +1035,9 @@ class SupabaseSync {
         } catch {
             print("  ❌ Erreur balance_accounts: \(error)")
         }
+
+        // 4. POINTS EN SUSPENS (fusion, jamais vidés localement)
+        await loadPendingItemsFromSupabase(using: context)
 
         // Sauvegarde unique des données Supabase
         print("\n💾 Sauvegarde données Supabase...")

@@ -382,6 +382,35 @@ enum DossierExport {
         }
         try? ctrl.data(using: .utf8)?.write(to: root.appendingPathComponent("Controles.txt"))
 
+        // PointsEnSuspens.csv (commentaires et taches par cycle)
+        let pendings = ((try? context.fetch(FetchDescriptor<PendingItem>())) ?? [])
+            .filter { $0.exerciceID == exercice.id }
+        if !pendings.isEmpty {
+            let df = DateFormatter(); df.dateFormat = "dd/MM/yyyy"
+            /// Neutralise separateurs et retours a la ligne pour rester en CSV valide.
+            func cell(_ s: String) -> String {
+                s.replacingOccurrences(of: ";", with: ",")
+                    .replacingOccurrences(of: "\n", with: " / ")
+                    .replacingOccurrences(of: "\r", with: " ")
+            }
+            let sorted = pendings.sorted { a, b in
+                let (ca, cb) = (a.cycle?.letter ?? "Z", b.cycle?.letter ?? "Z")
+                if ca != cb { return ca < cb }
+                if a.statut.isClosed != b.statut.isClosed { return !a.statut.isClosed }
+                if a.priorite.rank != b.priorite.rank { return a.priorite.rank < b.priorite.rank }
+                return a.creeLe < b.creeLe
+            }
+            var sus = "Cycle;Type;Intitulé;Détail;Statut;Priorité;Responsable;Échéance;Créé le;Modifié le\n"
+            for p in sorted {
+                let cyc = p.cycle.map { "\($0.letter) - \($0.shortName)" } ?? p.cycleRaw
+                let ech = p.echeance.map { df.string(from: $0) } ?? ""
+                sus += "\(cell(cyc));\(p.type.rawValue);\(cell(p.titre));\(cell(p.detail));"
+                sus += "\(p.statut.rawValue);\(p.priorite.rawValue);\(cell(p.responsable));"
+                sus += "\(ech);\(df.string(from: p.creeLe));\(df.string(from: p.updatedAt))\n"
+            }
+            try? sus.data(using: .utf8)?.write(to: root.appendingPathComponent("PointsEnSuspens.csv"))
+        }
+
         // Justificatifs (classes par cycle)
         let pieces = root.appendingPathComponent("Justificatifs", isDirectory: true)
         try? fm.createDirectory(at: pieces, withIntermediateDirectories: true)
@@ -506,6 +535,7 @@ struct CycleBalanceView: View {
     @Query private var justifications: [AccountJustification]
     @Query private var recons: [BankReconciliation]
     @Query private var reconItems: [ReconItem]
+    @Query private var pendingItems: [PendingItem]
 
     @State private var pendingAccount: String?
     @State private var showDocImporter = false
@@ -552,6 +582,18 @@ struct CycleBalanceView: View {
         return exerciceAccounts.filter { $0.effectiveCycle(rules: dict) == cycle }
     }
 
+    /// Points en suspens encore ouverts sur ce cycle (badge de l'onglet).
+    private var openPendingCount: Int {
+        pendingItems.filter {
+            $0.exerciceID == exerciceID && $0.cycleRaw == cycle.rawValue && !$0.statut.isClosed
+        }.count
+    }
+
+    /// Libellé de l'onglet Points en suspens, avec le nombre de points ouverts.
+    private var pendingTabLabel: String {
+        openPendingCount > 0 ? "Points en suspens (\(openPendingCount))" : "Points en suspens"
+    }
+
     private var totalDebit: Double { accounts.reduce(0) { $0 + $1.debit } }
     private var totalCredit: Double { accounts.reduce(0) { $0 + $1.credit } }
     private var totalSoldeN: Double { accounts.reduce(0) { $0 + $1.balanceN } }
@@ -559,9 +601,36 @@ struct CycleBalanceView: View {
 
     var body: some View {
         if cycle == .soldesIntermedialres {
-            SigView(exerciceID: exerciceID)
+            sigContent
         } else {
             cycleBalanceContent
+        }
+    }
+
+    /// Cycle A : les SIG n'ont pas de tableau de comptes, mais disposent
+    /// quand même du module Points en suspens.
+    private var sigContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Picker("", selection: $tab) {
+                    Text("Soldes intermédiaires").tag(0)
+                    Text(pendingTabLabel).tag(4)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 400)
+                Spacer()
+            }
+            .padding(.horizontal)
+            .padding(.top)
+            .padding(.bottom, 10)
+
+            Divider()
+
+            if tab == 4 {
+                CyclePendingItemsView(cycle: cycle, exerciceID: exerciceID)
+            } else {
+                SigView(exerciceID: exerciceID)
+            }
         }
     }
 
@@ -595,16 +664,19 @@ struct CycleBalanceView: View {
                         Text("Amortissements").tag(7)
                     }
                     Text("Contrôles").tag(2)
+                    Text(pendingTabLabel).tag(4)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: cycle == .immobilisations ? 600 : ((cycle == .tresorerie || cycle == .fiscal) ? 380 : 280))
+                .frame(width: cycle == .immobilisations ? 790 : ((cycle == .tresorerie || cycle == .fiscal) ? 570 : 470))
                 .padding(.top, 4)
             }
             .padding()
 
             Divider()
 
-            if tab == 2 {
+            if tab == 4 {
+                CyclePendingItemsView(cycle: cycle, exerciceID: exerciceID)
+            } else if tab == 2 {
                 CycleControlsView(cycle: cycle, exerciceID: exerciceID)
             } else if tab == 1 && cycle == .tresorerie {
                 CycleReconciliationView(exerciceID: exerciceID,
@@ -3261,7 +3333,7 @@ struct DossierPickerView: View {
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button { showNewDossier = true } label: {
-                        Label("Nouvelle société", systemImage: "building.2.crop.circle.badge.plus")
+                        Label("Nouvelle société", systemImage: "plus.circle.fill")
                     }
                 }
             }

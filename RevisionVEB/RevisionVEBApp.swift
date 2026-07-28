@@ -33,6 +33,7 @@ struct RevisionVEBApp: App {
             Class2Movement.self,
             ImmoAsset.self,
             SoldesIntermedialres.self,
+            PendingItem.self,
         ])
 
         // Supabase est la source de vérité. SwiftData = cache local synchronisé.
