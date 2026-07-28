@@ -55,19 +55,14 @@ class SupabaseSync {
                 return
             }
 
-            let existingIds = await getTableIds(tableName: "dossiers")
             print("📤 Dossiers: \(dossiers.count)")
-
-            for dossier in dossiers {
-                let payload: [String: Any] = [
-                    "id": dossier.id.pg,
-                    "nom": dossier.nom,
-                    "ordre": dossier.ordre
+            await bulkUpsert(tableName: "dossiers", rows: dossiers.map { d in
+                [
+                    "id": d.id.pg,
+                    "nom": d.nom,
+                    "ordre": d.ordre
                 ]
-
-                await upsertRecord(tableName: "dossiers", record: payload,
-                                   id: dossier.id.pg, existingIds: existingIds)
-            }
+            })
         } catch {
             print("❌ Erreur fetch: \(error)")
         }
@@ -80,19 +75,15 @@ class SupabaseSync {
             guard !exercices.isEmpty else { return }
 
             print("📤 Exercices: \(exercices.count)")
-            let existingIds = await getTableIds(tableName: "exercices")
-
-            for e in exercices {
-                let payload: [String: Any] = [
+            await bulkUpsert(tableName: "exercices", rows: exercices.map { e in
+                [
                     "id": e.id.pg,
                     "dossier_id": e.dossierID.pg,
                     "libelle": e.libelle,
                     "date_cloture": e.dateCloture.ISO8601Format(),
                     "cree_le": e.creeLe.ISO8601Format()
                 ]
-
-                await upsertRecord(tableName: "exercices", record: payload, id: e.id.pg, existingIds: existingIds)
-            }
+            })
         } catch {
             print("❌ Erreur exercices: \(error)")
         }
@@ -105,10 +96,8 @@ class SupabaseSync {
             guard !accounts.isEmpty else { return }
 
             print("📤 Balance Accounts: \(accounts.count)")
-            let existingIds = await getTableIds(tableName: "balance_accounts")
-
-            for a in accounts {
-                let payload: [String: Any] = [
+            await bulkUpsert(tableName: "balance_accounts", rows: accounts.map { a in
+                [
                     "id": a.id.pg,
                     "account_number": a.accountNumber,
                     "account_code": a.accountCode,
@@ -122,9 +111,7 @@ class SupabaseSync {
                     "source_file": a.sourceFile,
                     "import_date": a.importDate.ISO8601Format()
                 ]
-
-                await upsertRecord(tableName: "balance_accounts", record: payload, id: a.id.pg, existingIds: existingIds)
-            }
+            })
         } catch {
             print("❌ Erreur balance_accounts: \(error)")
         }
@@ -137,10 +124,8 @@ class SupabaseSync {
             guard !assets.isEmpty else { return }
 
             print("📤 Immo Assets: \(assets.count)")
-            let existingIds = await getTableIds(tableName: "immo_assets")
-
-            for a in assets {
-                let payload: [String: Any] = [
+            await bulkUpsert(tableName: "immo_assets", rows: assets.map { a in
+                [
                     "id": a.id.pg,
                     "exercice_id": a.exerciceID.pg,
                     "compte": a.compte,
@@ -153,9 +138,7 @@ class SupabaseSync {
                     "amort_exercice": isValidJSON(a.amortExercice) ? a.amortExercice : 0.0,
                     "ordre": a.ordre
                 ]
-
-                await upsertRecord(tableName: "immo_assets", record: payload, id: a.id.pg, existingIds: existingIds)
-            }
+            })
         } catch {
             print("❌ Erreur immo_assets: \(error)")
         }
@@ -171,9 +154,7 @@ class SupabaseSync {
             guard !items.isEmpty else { return }
 
             print("📤 Points en suspens: \(items.count)")
-            let existingIds = await getTableIds(tableName: "points_en_suspens")
-
-            for p in items {
+            await bulkUpsert(tableName: "points_en_suspens", rows: items.map { p in
                 var payload: [String: Any] = [
                     "id": p.id.pg,
                     "exercice_id": p.exerciceID.pg,
@@ -188,10 +169,8 @@ class SupabaseSync {
                     "updated_at": p.updatedAt.ISO8601Format()
                 ]
                 payload["echeance"] = p.echeance?.ISO8601Format() ?? NSNull()
-
-                await upsertRecord(tableName: "points_en_suspens", record: payload,
-                                   id: p.id.pg, existingIds: existingIds)
-            }
+                return payload
+            })
         } catch {
             print("❌ Erreur points en suspens: \(error)")
         }
@@ -297,10 +276,13 @@ class SupabaseSync {
             guard !soldes.isEmpty else { return }
 
             print("📤 Soldes Intermédiaires: \(soldes.count)")
-            let existingIds = await getTableIds(tableName: "soldes_intermediares")
+            // Un exemplaire par exercice : un lot ne peut pas viser deux fois
+            // la même clef primaire.
+            var seen = Set<UUID>()
+            let uniques = soldes.filter { seen.insert($0.exerciceID).inserted }
 
-            for s in soldes {
-                let payload: [String: Any] = [
+            await bulkUpsert(tableName: "soldes_intermediares", rows: uniques.map { s in
+                [
                     // Un seul jeu de SIG par exercice : identifiant dérivé de
                     // l'exercice, pour que les deux Macs visent la même ligne
                     // au lieu d'en créer chacun une.
@@ -369,9 +351,7 @@ class SupabaseSync {
                     "charges_exceptionnels_n1": s.chargesExceptionnelsN1
                 ]
 
-                await upsertRecord(tableName: "soldes_intermediares", record: payload,
-                                   id: Self.stableID(s.exerciceID.pg).pg, existingIds: existingIds)
-            }
+            })
         } catch {
             print("❌ Erreur soldes_intermediares: \(error)")
         }
@@ -381,6 +361,37 @@ class SupabaseSync {
 
     private func isValidJSON(_ value: Double) -> Bool {
         return !value.isNaN && !value.isInfinite
+    }
+
+    /// Envoie une collection en quelques requêtes au lieu d'une par ligne.
+    ///
+    /// PostgREST accepte un tableau d'objets et, avec `resolution=merge-duplicates`,
+    /// insère ou met à jour selon la clé primaire. Une balance de 600 comptes
+    /// passait par 600 allers-retours séquentiels — d'où les dizaines de secondes
+    /// avant que les données n'apparaissent. Elle tient maintenant en une poignée
+    /// de requêtes, et le choix POST/PATCH disparaît avec les conflits de clé.
+    func bulkUpsert(tableName: String, rows: [[String: Any]]) async {
+        guard !rows.isEmpty else { return }
+        let chunkSize = 250
+
+        for start in stride(from: 0, to: rows.count, by: chunkSize) {
+            let chunk = Array(rows[start..<min(start + chunkSize, rows.count)])
+            var request = URLRequest(url: URL(string: "\(baseURL)/rest/v1/\(tableName)")!)
+            request.httpMethod = "POST"
+            request.setValue("return=minimal,resolution=merge-duplicates",
+                             forHTTPHeaderField: "Prefer")
+            do {
+                request.httpBody = try JSONSerialization.data(withJSONObject: chunk)
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse,
+                      ![200, 201, 204].contains(http.statusCode) else { continue }
+                SyncDiagnostics.record(table: tableName,
+                                       status: http.statusCode,
+                                       body: String(data: data, encoding: .utf8) ?? "")
+            } catch {
+                print("❌ Envoi \(tableName): \(error.localizedDescription)")
+            }
+        }
     }
 
     func upsertRecord(tableName: String, record: [String: Any], id: String, existingIds: Set<String>) async {
@@ -904,6 +915,7 @@ class SupabaseSync {
         await syncImmoAssets(from: container)
         await syncPendingItems(from: container)
         await syncAuditWork(from: container)
+        await syncJustificatifs(from: container)
 
         // ÉTAPE 2: CHARGER depuis Supabase (pour les autres Macs)
         print("\n📥 ÉTAPE 2: Chargement Supabase → local")

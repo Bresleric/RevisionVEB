@@ -99,20 +99,25 @@ extension SupabaseSync {
     private func safe(_ v: Double) -> Double { (v.isNaN || v.isInfinite) ? 0 : v }
 
     /// Envoi generique d'une collection vers une table Supabase.
+    ///
+    /// `id` sert a dedoublonner avant l'envoi : deux enregistrements locaux
+    /// partageant la meme cle logique produiraient la meme ligne, et PostgREST
+    /// refuse un lot qui vise deux fois la meme clef primaire.
     private func push<T>(_ table: String,
                          _ rows: [T],
                          label: String,
                          id: (T) -> UUID,
                          payload: (T) -> [String: Any]) async {
         guard !rows.isEmpty else { return }
-        print("📤 \(label): \(rows.count)")
-        let existingIds = await getTableIds(tableName: table)
-        for row in rows {
-            await upsertRecord(tableName: table,
-                               record: payload(row),
-                               id: id(row).pg,
-                               existingIds: existingIds)
+
+        var seen = Set<UUID>()
+        var batch: [[String: Any]] = []
+        for row in rows where seen.insert(id(row)).inserted {
+            batch.append(payload(row))
         }
+
+        print("📤 \(label): \(batch.count)")
+        await bulkUpsert(tableName: table, rows: batch)
     }
 
     /// Lecture generique d'une table Supabase.
@@ -400,6 +405,47 @@ extension SupabaseSync {
                 "cycle_raw": r.cycleRaw
             ]
         }
+    }
+
+    // MARK: - Pièces justificatives
+
+    /// Dépose sur Supabase les pièces présentes en local et absentes du bucket.
+    ///
+    /// La base ne transporte que le chemin du fichier, propre à la machine qui
+    /// a rattaché la pièce. Sans le fichier lui-même sur le serveur, l'autre Mac
+    /// affiche bien la référence mais ne peut rien ouvrir.
+    func syncJustificatifs(from container: ModelContainer) async {
+        let context = ModelContext(container)
+
+        func paths<T: PersistentModel>(_ type: T.Type, _ extract: (T) -> (String, UUID)) -> [(String, UUID)] {
+            ((try? context.fetch(FetchDescriptor<T>())) ?? []).map(extract).filter { !$0.0.isEmpty }
+        }
+
+        var docs: [(path: String, exercice: UUID)] = []
+        docs += paths(AccountJustification.self) { ($0.docPath, $0.exerciceID) }
+        docs += paths(ReconItem.self) { ($0.docPath, $0.exerciceID) }
+        docs += paths(ImmoInvoice.self) { ($0.docPath, $0.exerciceID) }
+
+        // Seuls les fichiers réellement présents sur cette machine sont candidats.
+        let local = docs.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard !local.isEmpty else { return }
+
+        var known: [UUID: Set<String>] = [:]
+        var sent = 0
+
+        for doc in local {
+            guard let remote = SupabaseStorage.remotePath(forLocalPath: doc.path) else { continue }
+            if known[doc.exercice] == nil {
+                known[doc.exercice] = await SupabaseStorage.existingPaths(exerciceID: doc.exercice)
+            }
+            if known[doc.exercice]?.contains(remote) == true { continue }
+            if await SupabaseStorage.upload(localPath: doc.path, remotePath: remote) {
+                known[doc.exercice]?.insert(remote)
+                sent += 1
+            }
+        }
+
+        print("📎 Pièces justificatives: \(sent) envoyée\(sent > 1 ? "s" : "") (\(local.count) en local)")
     }
 
     // MARK: - Chargement (Supabase → local)

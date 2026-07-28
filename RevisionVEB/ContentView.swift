@@ -795,6 +795,7 @@ struct CycleBalanceView: View {
         j.docPath = copied.path
         j.docName = copied.name
         j.docBookmark = nil
+        uploadJustificatif(path: copied.path)
         j.updatedAt = Date()
         try? modelContext.save()
     }
@@ -941,6 +942,16 @@ enum JustificatifStore {
     }
 }
 
+/// Depose la piece sur Supabase des son rattachement.
+///
+/// La synchronisation complete ne tourne qu'au lancement : sans cet envoi
+/// immediat, une piece ajoutee en cours de session ne serait ouvrable depuis
+/// l'autre Mac qu'apres un redemarrage.
+func uploadJustificatif(path: String) {
+    guard let remote = SupabaseStorage.remotePath(forLocalPath: path) else { return }
+    Task { await SupabaseStorage.upload(localPath: path, remotePath: remote) }
+}
+
 /// Ouvre la piece justificative : via bookmark securise si possible, sinon par le chemin.
 func openJustificationDocument(path: String, bookmark: Data?) {
     if let data = bookmark {
@@ -956,8 +967,46 @@ func openJustificationDocument(path: String, bookmark: Data?) {
             }
         }
     }
-    if !path.isEmpty {
+
+    guard !path.isEmpty else { return }
+
+    // Le chemin enregistré est celui du Mac qui a rattaché la pièce. Sur l'autre
+    // machine il ne mène nulle part : on cherche d'abord la pièce dans le
+    // conteneur local, puis on la récupère depuis Supabase si besoin.
+    if FileManager.default.fileExists(atPath: path) {
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        return
+    }
+
+    guard let remote = SupabaseStorage.remotePath(forLocalPath: path),
+          let exerciceID = UUID(uuidString: URL(fileURLWithPath: path)
+              .deletingLastPathComponent().lastPathComponent)
+    else { return }
+
+    let local = JustificatifStore.dir(forExercice: exerciceID)
+        .appendingPathComponent(URL(fileURLWithPath: path).lastPathComponent)
+
+    if FileManager.default.fileExists(atPath: local.path) {
+        NSWorkspace.shared.open(local)
+        return
+    }
+
+    Task { @MainActor in
+        if let fetched = await SupabaseStorage.download(remotePath: remote, to: local) {
+            NSWorkspace.shared.open(fetched)
+        } else {
+            let alert = NSAlert()
+            alert.messageText = "Pièce introuvable"
+            alert.informativeText = """
+                Le document « \(URL(fileURLWithPath: path).lastPathComponent) » n'est pas \
+                disponible sur cette machine et n'a pas pu être récupéré depuis Supabase.
+
+                Ouvre le dossier sur le Mac où la pièce a été rattachée : elle sera déposée \
+                à la prochaine synchronisation.
+                """
+            alert.alertStyle = .informational
+            alert.runModal()
+        }
     }
 }
 
@@ -1243,6 +1292,7 @@ private struct ReconciliationCard: View {
         item.docPath = copied.path
         item.docName = copied.name
         item.docBookmark = nil
+        uploadJustificatif(path: copied.path)
         try? modelContext.save()
     }
 
@@ -2785,6 +2835,7 @@ struct ImmoInvoicesView: View {
         let label = inv.compte.isEmpty ? "immo" : inv.compte
         guard let copied = JustificatifStore.copyIn(source: url, exerciceID: exerciceID, accountNumber: "G \(label)") else { return }
         inv.docPath = copied.path; inv.docName = copied.name; inv.docBookmark = nil
+        uploadJustificatif(path: copied.path)
         try? modelContext.save()
     }
     private func removeDoc(_ inv: ImmoInvoice) {
