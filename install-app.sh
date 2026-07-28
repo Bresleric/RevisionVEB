@@ -4,14 +4,25 @@
 #
 # La copie posée dans le Dock pointe vers /Applications/RevisionVEB.app, un
 # emplacement stable — contrairement à DerivedData, dont le chemin change et
-# dont le contenu est effacé par un Clean. Relancer ce script après une
-# évolution de l'app met à jour l'icône du Dock.
+# dont le contenu est effacé par un Clean.
 #
-#   ./install-app.sh
+#   ./install-app.sh              installe
+#   ./install-app.sh --relaunch   installe puis rouvre l'application
+#   ./install-app.sh --quiet      sans redémarrage du Dock (usage automatisé)
 #
 set -euo pipefail
 
 cd "$(dirname "$0")"
+
+RELAUNCH=false
+QUIET=false
+for arg in "$@"; do
+    case "$arg" in
+        --relaunch) RELAUNCH=true ;;
+        --quiet)    QUIET=true ;;
+        *) echo "Option inconnue : $arg"; exit 2 ;;
+    esac
+done
 
 DERIVED=$(mktemp -d /tmp/revisionveb-release.XXXXXX)
 trap 'rm -rf "$DERIVED"' EXIT
@@ -38,19 +49,34 @@ else
     echo "ℹ️  /Applications non accessible en écriture, installation dans $DEST"
 fi
 
-# L'application est peut-être en cours d'exécution : on la ferme proprement.
-if pgrep -f "$DEST/RevisionVEB.app/Contents/MacOS/RevisionVEB" > /dev/null; then
+# L'application enregistre ses données avant de se fermer : on lui demande de
+# quitter proprement plutôt que de la tuer.
+WAS_RUNNING=false
+if pgrep -f "RevisionVEB.app/Contents/MacOS/RevisionVEB" > /dev/null; then
+    WAS_RUNNING=true
     echo "⏹  Fermeture de l'application en cours…"
     osascript -e 'quit app "RevisionVEB"' 2>/dev/null || true
-    sleep 2
+    for _ in $(seq 1 10); do
+        pgrep -f "RevisionVEB.app/Contents/MacOS/RevisionVEB" > /dev/null || break
+        sleep 1
+    done
 fi
 
 rm -rf "$DEST/RevisionVEB.app"
 cp -R "$SRC" "$DEST/RevisionVEB.app"
-
-# Force le Finder et le Dock à relire l'icône, sinon l'ancienne reste affichée.
 touch "$DEST/RevisionVEB.app"
-killall Dock 2>/dev/null || true
+
+# Le Dock garde l'ancienne icône en cache. On ne le redémarre qu'en usage
+# interactif : en boucle de déploiement ce serait perturbant à chaque mise à jour.
+if [ "$QUIET" = false ]; then
+    killall Dock 2>/dev/null || true
+fi
 
 echo "✅ Installée : $DEST/RevisionVEB.app"
-echo "   Pour l'ajouter au Dock : ouvre le dossier et fais glisser l'icône dessus."
+
+if [ "$RELAUNCH" = true ] || [ "$WAS_RUNNING" = true ]; then
+    open "$DEST/RevisionVEB.app"
+    echo "🚀 Application relancée"
+else
+    echo "   Pour l'ajouter au Dock : ouvre le dossier et fais glisser l'icône dessus."
+fi
