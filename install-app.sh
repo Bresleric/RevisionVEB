@@ -6,9 +6,11 @@
 # emplacement stable — contrairement à DerivedData, dont le chemin change et
 # dont le contenu est effacé par un Clean.
 #
-#   ./install-app.sh              installe
-#   ./install-app.sh --relaunch   installe puis rouvre l'application
-#   ./install-app.sh --quiet      sans redémarrage du Dock (usage automatisé)
+#   ./install-app.sh                installe
+#   ./install-app.sh --relaunch     installe puis rouvre l'application
+#   ./install-app.sh --quiet        sans redémarrage du Dock (usage automatisé)
+#   ./install-app.sh --install-hook pose le hook Git qui propose la mise à jour
+#                                   après chaque commit touchant l'application
 #
 set -euo pipefail
 
@@ -20,6 +22,23 @@ for arg in "$@"; do
     case "$arg" in
         --relaunch) RELAUNCH=true ;;
         --quiet)    QUIET=true ;;
+        --install-hook)
+            HOOK="$(git rev-parse --git-dir)/hooks/post-commit"
+            mkdir -p "$(dirname "$HOOK")"
+            cat > "$HOOK" <<'HOOK_END'
+#!/bin/bash
+# Propose de mettre à jour l'application du Dock. Détaché du commit : le hook
+# rend la main immédiatement, la compilation se fait en arrière-plan.
+REPO="$(git rev-parse --show-toplevel)"
+[ -x "$REPO/update-dock-app.sh" ] && nohup "$REPO/update-dock-app.sh" >/dev/null 2>&1 &
+exit 0
+HOOK_END
+            chmod +x "$HOOK"
+            echo "✅ Hook posé : $HOOK"
+            echo "   Après chaque commit touchant l'app, une fenêtre proposera la mise à jour."
+            echo "   Pour le retirer : rm \"$HOOK\""
+            exit 0
+            ;;
         *) echo "Option inconnue : $arg"; exit 2 ;;
     esac
 done
