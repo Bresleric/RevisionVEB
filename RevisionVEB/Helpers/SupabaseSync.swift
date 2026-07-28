@@ -301,7 +301,10 @@ class SupabaseSync {
 
             for s in soldes {
                 let payload: [String: Any] = [
-                    "id": s.id.pg,
+                    // Un seul jeu de SIG par exercice : identifiant dérivé de
+                    // l'exercice, pour que les deux Macs visent la même ligne
+                    // au lieu d'en créer chacun une.
+                    "id": Self.stableID(s.exerciceID.pg).pg,
                     "exercice_id": s.exerciceID.pg,
                     "marge_brute": s.margeBrute,
                     "production_exercice": s.productionExercice,
@@ -366,7 +369,8 @@ class SupabaseSync {
                     "charges_exceptionnels_n1": s.chargesExceptionnelsN1
                 ]
 
-                await upsertRecord(tableName: "soldes_intermediares", record: payload, id: s.id.pg, existingIds: existingIds)
+                await upsertRecord(tableName: "soldes_intermediares", record: payload,
+                                   id: Self.stableID(s.exerciceID.pg).pg, existingIds: existingIds)
             }
         } catch {
             print("❌ Erreur soldes_intermediares: \(error)")
@@ -719,10 +723,12 @@ class SupabaseSync {
                     guard !jsonArray.isEmpty else { return }
 
                     // Charger les IDs locaux
-                    var localIds = Set<UUID>()
+                    // Indexé par exercice : les SIG sont recalculés localement depuis
+                    // la balance, un exemplaire par exercice suffit.
+                    var localExercices = Set<UUID>()
                     do {
                         let locals = try context.fetch(FetchDescriptor<SoldesIntermedialres>())
-                        localIds = Set(locals.map { $0.id })
+                        localExercices = Set(locals.map { $0.exerciceID })
                     } catch {
                         print("⚠️ Erreur lecture soldes_intermediares locaux: \(error)")
                     }
@@ -734,9 +740,8 @@ class SupabaseSync {
                               let exerciceIdStr = item["exercice_id"] as? String,
                               let exerciceId = UUID(uuidString: exerciceIdStr) else { continue }
 
-                        if localIds.contains(id) {
-                            continue
-                        }
+                        if localExercices.contains(exerciceId) { continue }
+                        localExercices.insert(exerciceId)
 
                         // Extract values in separate steps to avoid compiler type-checking issues
                         let d0 = (item["marge_brute"] as? NSNumber)?.doubleValue ?? 0.0
@@ -870,7 +875,7 @@ class SupabaseSync {
                     if loaded > 0 {
                         try context.save()
                     }
-                    print("✅ \(loaded) soldes intermédiaires chargés (+ \(localIds.count) déjà locaux)")
+                    print("✅ \(loaded) soldes intermédiaires chargés (+ \(localExercices.count) exercices déjà locaux)")
                 }
             }
         } catch {
