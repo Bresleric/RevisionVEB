@@ -16,12 +16,40 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+usage() {
+    cat <<'USAGE'
+Installe RevisionVEB dans /Applications (l'app du Dock).
+
+  ./install-app.sh                  compile en Release et installe
+  ./install-app.sh --relaunch       installe puis rouvre l'application
+  ./install-app.sh --quiet          sans redémarrage du Dock (usage automatisé)
+
+  ./install-app.sh --install-hook   après chaque commit touchant l'app, une
+                                    fenêtre propose la mise à jour
+  ./install-app.sh --uninstall-hook retire cette fenêtre
+
+Voir aussi README.md pour l'ensemble des commandes d'exploitation.
+USAGE
+}
+
 RELAUNCH=false
 QUIET=false
 for arg in "$@"; do
     case "$arg" in
+        -h|--help)  usage; exit 0 ;;
         --relaunch) RELAUNCH=true ;;
         --quiet)    QUIET=true ;;
+        --uninstall-hook)
+            HOOK="$(git rev-parse --git-dir)/hooks/post-commit"
+            if [ -f "$HOOK" ]; then
+                rm -f "$HOOK"
+                echo "✅ Hook retiré. Les commits ne proposeront plus la mise à jour."
+            else
+                echo "ℹ️  Aucun hook posé."
+            fi
+            echo "   Pour le remettre : ./install-app.sh --install-hook"
+            exit 0
+            ;;
         --install-hook)
             HOOK="$(git rev-parse --git-dir)/hooks/post-commit"
             mkdir -p "$(dirname "$HOOK")"
@@ -39,7 +67,7 @@ HOOK_END
             echo "   Pour le retirer : rm \"$HOOK\""
             exit 0
             ;;
-        *) echo "Option inconnue : $arg"; exit 2 ;;
+        *) echo "Option inconnue : $arg"; echo; usage; exit 2 ;;
     esac
 done
 
