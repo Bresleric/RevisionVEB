@@ -5,25 +5,32 @@ import SwiftData
 class SupabaseSync {
     static let shared = SupabaseSync()
 
-    private let baseURL: String
-    private let anonKey: String
+    let baseURL: String
+    let anonKey: String
 
     init() {
         self.baseURL = SupabaseConfig.url
         self.anonKey = SupabaseConfig.anonKey
-        print("📱 Supabase configuré: \(baseURL)")
-    }
 
-    private var session: URLSession {
         let config = URLSessionConfiguration.default
         config.httpAdditionalHeaders = [
-            "Authorization": "Bearer \(anonKey)",
-            "apikey": anonKey,
+            "Authorization": "Bearer \(SupabaseConfig.anonKey)",
+            "apikey": SupabaseConfig.anonKey,
             "Content-Type": "application/json",
             "Prefer": "return=minimal"
         ]
-        return URLSession(configuration: config)
+        self.session = URLSession(configuration: config)
+
+        print("📱 Supabase configuré: \(baseURL)")
     }
+
+    /// Session unique et réutilisée.
+    ///
+    /// C'était auparavant une propriété calculée : chaque requête créait une
+    /// URLSession neuve, soit ~700 par synchronisation, chacune ouvrant son
+    /// propre pool de connexions sans jamais le refermer. D'où le déluge de
+    /// messages nw_connection / tcp_output dans la console.
+    let session: URLSession
 
     // MARK: - Dossiers Sync (Working)
 
@@ -47,28 +54,8 @@ class SupabaseSync {
                     "ordre": dossier.ordre
                 ]
 
-                let idStr = dossier.id.uuidString
-                let url = URL(string: "\(baseURL)/rest/v1/dossiers")!
-                var request = URLRequest(url: url)
-                request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-
-                if existingIds.contains(idStr) {
-                    request.httpMethod = "PATCH"
-                    request.url = URL(string: "\(baseURL)/rest/v1/dossiers?id=eq.\(idStr)")!
-                } else {
-                    request.httpMethod = "POST"
-                }
-
-                do {
-                    let (_, response) = try await session.data(for: request)
-                    if let httpResponse = response as? HTTPURLResponse {
-                        if [200, 201, 204].contains(httpResponse.statusCode) {
-                            print("✅ \(dossier.nom)")
-                        }
-                    }
-                } catch {
-                    print("⚠️ Erreur dossier: \(error.localizedDescription)")
-                }
+                await upsertRecord(tableName: "dossiers", record: payload,
+                                   id: dossier.id.uuidString, existingIds: existingIds)
             }
         } catch {
             print("❌ Erreur fetch: \(error)")
@@ -381,7 +368,7 @@ class SupabaseSync {
         return !value.isNaN && !value.isInfinite
     }
 
-    private func upsertRecord(tableName: String, record: [String: Any], id: String, existingIds: Set<String>) async {
+    func upsertRecord(tableName: String, record: [String: Any], id: String, existingIds: Set<String>) async {
         let url = URL(string: "\(baseURL)/rest/v1/\(tableName)")!
         var request = URLRequest(url: url)
 
@@ -395,33 +382,53 @@ class SupabaseSync {
                 request.httpMethod = "POST"
             }
 
-            let (_, response) = try await session.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse {
-                if ![200, 201, 204, 409].contains(httpResponse.statusCode) {
-                    print("⚠️ Erreur \(tableName): \(httpResponse.statusCode)")
-                }
-            }
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  ![200, 201, 204].contains(httpResponse.statusCode) else { return }
+
+            // Un 409 n'est pas anodin : c'est soit une clé déjà présente
+            // (23505), soit une clé étrangère manquante (23503). Le corps de la
+            // réponse porte le code PostgreSQL, seul moyen de faire la
+            // différence — on le remonte au lieu de masquer l'erreur.
+            let detail = String(data: data, encoding: .utf8) ?? ""
+            SyncDiagnostics.record(table: tableName,
+                                   status: httpResponse.statusCode,
+                                   body: detail)
         } catch {
             print("❌ Erreur upsert: \(error.localizedDescription)")
         }
     }
 
-    private func getTableIds(tableName: String) async -> Set<String> {
-        do {
-            let url = URL(string: "\(baseURL)/rest/v1/\(tableName)?select=id")!
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
+    /// Identifiants déjà présents dans une table, paginés.
+    ///
+    /// PostgREST plafonne le nombre de lignes par réponse. Sans pagination, une
+    /// table de plus de 1000 lignes renverrait une liste tronquée : les
+    /// enregistrements manquants seraient alors envoyés en POST au lieu de
+    /// PATCH, et rejetés en 409 pour clé dupliquée.
+    func getTableIds(tableName: String) async -> Set<String> {
+        var ids = Set<String>()
+        let pageSize = 1000
+        var offset = 0
 
-            let (data, response) = try await session.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                    return Set(jsonArray.compactMap { $0["id"] as? String })
-                }
+        while true {
+            do {
+                let url = URL(string: "\(baseURL)/rest/v1/\(tableName)?select=id&limit=\(pageSize)&offset=\(offset)")!
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+                else { return ids }
+
+                ids.formUnion(rows.compactMap { $0["id"] as? String })
+                if rows.count < pageSize { return ids }
+                offset += pageSize
+            } catch {
+                print("⚠️ Erreur fetch IDs \(tableName): \(error.localizedDescription)")
+                return ids
             }
-        } catch {
-            print("⚠️ Erreur fetch IDs: \(error.localizedDescription)")
         }
-        return Set()
     }
 
     // MARK: - Load from Supabase
@@ -686,9 +693,8 @@ class SupabaseSync {
         }
     }
 
-    func loadSoldesIntermedialresFromSupabase(to container: ModelContainer) async {
+    func loadSoldesIntermedialresFromSupabase(using context: ModelContext) async {
         do {
-            let context = ModelContext(container)
             print("📥 Soldes Intermédiaires: chargement...")
 
             let url = URL(string: "\(baseURL)/rest/v1/soldes_intermediares")!
@@ -865,6 +871,7 @@ class SupabaseSync {
     func fullSync(from container: ModelContainer) async {
         print("🚀 Début synchronisation Supabase...")
         print("   URL: \(baseURL)")
+        SyncDiagnostics.reset()
 
         // PHASE 1: Charger TOUT avec un SEUL context
         let context = ModelContext(container)
@@ -875,31 +882,24 @@ class SupabaseSync {
         await syncExercices(from: container)
         await syncBalanceAccounts(from: container)
         await syncSoldesIntermediales(from: container)
+        await syncImmoAssets(from: container)
         await syncPendingItems(from: container)
+        await syncAuditWork(from: container)
 
         // ÉTAPE 2: CHARGER depuis Supabase (pour les autres Macs)
         print("\n📥 ÉTAPE 2: Chargement Supabase → local")
         await loadAllFromSupabase(using: context)
 
+        SyncDiagnostics.report()
         print("\n✅ Synchronisation complétée!")
     }
 
     private func loadAllFromSupabase(using context: ModelContext) async {
         print("📥 Chargement depuis Supabase...")
 
-        // SAUVEGARDE: Récupérer les contrôles AVANT vidage
-        var savedJustifications: [AccountJustification] = []
-        var savedTva: [TvaCompteTaux] = []
-        var savedControlStates: [ControlState] = []
-
-        do {
-            savedJustifications = try context.fetch(FetchDescriptor<AccountJustification>())
-            savedTva = try context.fetch(FetchDescriptor<TvaCompteTaux>())
-            savedControlStates = try context.fetch(FetchDescriptor<ControlState>())
-            print("  ✅ Sauvegarde: \(savedJustifications.count) justifications, \(savedTva.count) TVA, \(savedControlStates.count) contrôles")
-        } catch {
-            print("  ⚠️  Erreur sauvegarde: \(error)")
-        }
+        // Seules les données importées (dossiers, exercices, balance) sont
+        // rechargées à neuf. Le travail d'audit n'est jamais vidé : il est
+        // fusionné par identifiant plus bas, via loadAuditWork.
 
         // Vider les tables de DATA (pas les contrôles)
         do {
@@ -1039,6 +1039,13 @@ class SupabaseSync {
         // 4. POINTS EN SUSPENS (fusion, jamais vidés localement)
         await loadPendingItemsFromSupabase(using: context)
 
+        // 5. SOLDES INTERMÉDIAIRES (fusion)
+        await loadSoldesIntermedialresFromSupabase(using: context)
+
+        // 6. TRAVAIL D'AUDIT : contrôles, justifications, TVA, rapprochements,
+        //    immobilisations, règles de cycle (fusion, jamais vidés localement)
+        await loadAuditWork(using: context)
+
         // Sauvegarde unique des données Supabase
         print("\n💾 Sauvegarde données Supabase...")
         do {
@@ -1048,25 +1055,5 @@ class SupabaseSync {
             print("❌ Erreur sauvegarde: \(error)")
         }
 
-        // RESTAURATION: Réinsérer les contrôles sauvegardés
-        print("\n📥 Restauration des contrôles...")
-        for justif in savedJustifications {
-            context.insert(justif)
-        }
-        for tva in savedTva {
-            context.insert(tva)
-        }
-        for control in savedControlStates {
-            context.insert(control)
-        }
-
-        if !savedJustifications.isEmpty || !savedTva.isEmpty || !savedControlStates.isEmpty {
-            do {
-                try context.save()
-                print("✅ Contrôles restaurés: \(savedJustifications.count) justifications, \(savedTva.count) TVA, \(savedControlStates.count) contrôles")
-            } catch {
-                print("❌ Erreur restauration: \(error)")
-            }
-        }
     }
 }
