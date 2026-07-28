@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xcodebuild -scheme RevisionVEB *)",
+      "mcp__supabase-planb__list_tables",
+      "mcp__supabase-planb__list_migrations",
+      "mcp__supabase-planb__list_extensions",
+      "mcp__supabase-planb__list_edge_functions",
+      "mcp__supabase-planb__get_project_url",
+      "mcp__supabase-planb__get_advisors",
+      "mcp__supabase-planb__get_logs",
+      "mcp__supabase-planb__search_docs",
+      "mcp__computer-use__screenshot"
+    ]
+  }
+}
