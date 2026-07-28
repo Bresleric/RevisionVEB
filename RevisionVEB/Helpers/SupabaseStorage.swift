@@ -12,6 +12,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 @MainActor
 enum SupabaseStorage {
@@ -26,21 +27,40 @@ enum SupabaseStorage {
         ]
     }
 
-    /// Chemin distant d'une piece : `<exercice>/<nom de fichier>`.
+    /// Chemin distant d'une piece : `<exercice>/<empreinte>-<nom assaini>`.
     ///
-    /// Se deduit du chemin local, dont les deux derniers elements sont
-    /// justement l'exercice et le nom du fichier. Les deux Macs calculent donc
-    /// le meme chemin sans rien stocker de plus.
+    /// Storage refuse les caracteres non ASCII dans un nom d'objet : « Tab amort
+    /// pret FDC.pdf » etait rejete en `InvalidKey` a cause de son accent, et la
+    /// piece restait introuvable depuis l'autre Mac. Le nom est donc replie en
+    /// ASCII.
+    ///
+    /// Deux pieces ne differant que par leurs accents produiraient alors la meme
+    /// clef, et la seconde ecraserait la premiere. On prefixe donc une empreinte
+    /// du nom d'origine. Le calcul ne depend que du nom de fichier : les deux
+    /// Macs aboutissent a la meme clef sans rien stocker de plus.
     static func remotePath(forLocalPath path: String) -> String? {
         let url = URL(fileURLWithPath: path)
         let file = url.lastPathComponent
         let exercice = url.deletingLastPathComponent().lastPathComponent
-        guard !file.isEmpty, !exercice.isEmpty, UUID(uuidString: exercice) != nil else { return nil }
-        return "\(exercice)/\(file)"
+        guard !file.isEmpty, let id = UUID(uuidString: exercice) else { return nil }
+        return remotePath(exerciceID: id, fileName: file)
     }
 
     static func remotePath(exerciceID: UUID, fileName: String) -> String {
-        "\(exerciceID.uuidString)/\(fileName)"
+        // Le systeme de fichiers macOS restitue les noms en forme decomposee :
+        // on recompose avant de calculer l'empreinte, sinon deux machines
+        // pourraient hacher deux representations du meme nom.
+        let name = fileName.precomposedStringWithCanonicalMapping
+        let digest = SHA256.hash(data: Data(name.utf8))
+        let stamp = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
+
+        let folded = name.folding(options: [.diacriticInsensitive, .widthInsensitive],
+                                  locale: Locale(identifier: "en_US_POSIX"))
+        let safe = String(folded.map { ch in
+            ch.isASCII && (ch.isLetter || ch.isNumber || "-_. ".contains(ch)) ? ch : "_"
+        }.prefix(120))
+
+        return "\(exerciceID.uuidString)/\(stamp)-\(safe)"
     }
 
     private static func encoded(_ path: String) -> String {
