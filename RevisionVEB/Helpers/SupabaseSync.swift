@@ -1,6 +1,17 @@
 import Foundation
 import SwiftData
 
+extension UUID {
+    /// Identifiant au format PostgreSQL, en minuscules.
+    ///
+    /// `uuidString` renvoie des majuscules alors que PostgreSQL stocke et
+    /// relit les uuid en minuscules. Comparer les deux directement ne
+    /// correspond jamais : chaque enregistrement était donc envoyé en POST au
+    /// lieu de PATCH, et rejeté pour clé dupliquée. Aucune mise à jour n'a
+    /// jamais pu remonter sur Supabase avant cette correction.
+    var pg: String { uuidString.lowercased() }
+}
+
 @MainActor
 class SupabaseSync {
     static let shared = SupabaseSync()
@@ -49,13 +60,13 @@ class SupabaseSync {
 
             for dossier in dossiers {
                 let payload: [String: Any] = [
-                    "id": dossier.id.uuidString,
+                    "id": dossier.id.pg,
                     "nom": dossier.nom,
                     "ordre": dossier.ordre
                 ]
 
                 await upsertRecord(tableName: "dossiers", record: payload,
-                                   id: dossier.id.uuidString, existingIds: existingIds)
+                                   id: dossier.id.pg, existingIds: existingIds)
             }
         } catch {
             print("❌ Erreur fetch: \(error)")
@@ -73,14 +84,14 @@ class SupabaseSync {
 
             for e in exercices {
                 let payload: [String: Any] = [
-                    "id": e.id.uuidString,
-                    "dossier_id": e.dossierID.uuidString,
+                    "id": e.id.pg,
+                    "dossier_id": e.dossierID.pg,
                     "libelle": e.libelle,
                     "date_cloture": e.dateCloture.ISO8601Format(),
                     "cree_le": e.creeLe.ISO8601Format()
                 ]
 
-                await upsertRecord(tableName: "exercices", record: payload, id: e.id.uuidString, existingIds: existingIds)
+                await upsertRecord(tableName: "exercices", record: payload, id: e.id.pg, existingIds: existingIds)
             }
         } catch {
             print("❌ Erreur exercices: \(error)")
@@ -98,7 +109,7 @@ class SupabaseSync {
 
             for a in accounts {
                 let payload: [String: Any] = [
-                    "id": a.id.uuidString,
+                    "id": a.id.pg,
                     "account_number": a.accountNumber,
                     "account_code": a.accountCode,
                     "account_label": a.accountLabel,
@@ -107,12 +118,12 @@ class SupabaseSync {
                     "balance_n": a.balanceN,
                     "balance_n_minus_1": a.balanceNMinus1,
                     "restaurant": a.restaurant.rawValue,
-                    "exercice_id": a.exerciceID.uuidString,
+                    "exercice_id": a.exerciceID.pg,
                     "source_file": a.sourceFile,
                     "import_date": a.importDate.ISO8601Format()
                 ]
 
-                await upsertRecord(tableName: "balance_accounts", record: payload, id: a.id.uuidString, existingIds: existingIds)
+                await upsertRecord(tableName: "balance_accounts", record: payload, id: a.id.pg, existingIds: existingIds)
             }
         } catch {
             print("❌ Erreur balance_accounts: \(error)")
@@ -130,8 +141,8 @@ class SupabaseSync {
 
             for a in assets {
                 let payload: [String: Any] = [
-                    "id": a.id.uuidString,
-                    "exercice_id": a.exerciceID.uuidString,
+                    "id": a.id.pg,
+                    "exercice_id": a.exerciceID.pg,
                     "compte": a.compte,
                     "numero_immo": a.numeroImmo,
                     "libelle": a.libelle,
@@ -143,7 +154,7 @@ class SupabaseSync {
                     "ordre": a.ordre
                 ]
 
-                await upsertRecord(tableName: "immo_assets", record: payload, id: a.id.uuidString, existingIds: existingIds)
+                await upsertRecord(tableName: "immo_assets", record: payload, id: a.id.pg, existingIds: existingIds)
             }
         } catch {
             print("❌ Erreur immo_assets: \(error)")
@@ -164,8 +175,8 @@ class SupabaseSync {
 
             for p in items {
                 var payload: [String: Any] = [
-                    "id": p.id.uuidString,
-                    "exercice_id": p.exerciceID.uuidString,
+                    "id": p.id.pg,
+                    "exercice_id": p.exerciceID.pg,
                     "cycle_raw": p.cycleRaw,
                     "titre": p.titre,
                     "detail": p.detail,
@@ -179,7 +190,7 @@ class SupabaseSync {
                 payload["echeance"] = p.echeance?.ISO8601Format() ?? NSNull()
 
                 await upsertRecord(tableName: "points_en_suspens", record: payload,
-                                   id: p.id.uuidString, existingIds: existingIds)
+                                   id: p.id.pg, existingIds: existingIds)
             }
         } catch {
             print("❌ Erreur points en suspens: \(error)")
@@ -266,7 +277,7 @@ class SupabaseSync {
     /// afin qu'il ne réapparaisse pas à la synchronisation suivante.
     func deletePendingItemRemote(id: UUID) async {
         do {
-            let url = URL(string: "\(baseURL)/rest/v1/points_en_suspens?id=eq.\(id.uuidString)")!
+            let url = URL(string: "\(baseURL)/rest/v1/points_en_suspens?id=eq.\(id.pg)")!
             var request = URLRequest(url: url)
             request.httpMethod = "DELETE"
             let (_, response) = try await session.data(for: request)
@@ -290,8 +301,8 @@ class SupabaseSync {
 
             for s in soldes {
                 let payload: [String: Any] = [
-                    "id": s.id.uuidString,
-                    "exercice_id": s.exerciceID.uuidString,
+                    "id": s.id.pg,
+                    "exercice_id": s.exerciceID.pg,
                     "marge_brute": s.margeBrute,
                     "production_exercice": s.productionExercice,
                     "valeur_ajoutee": s.valeurAjoutee,
@@ -355,7 +366,7 @@ class SupabaseSync {
                     "charges_exceptionnels_n1": s.chargesExceptionnelsN1
                 ]
 
-                await upsertRecord(tableName: "soldes_intermediares", record: payload, id: s.id.uuidString, existingIds: existingIds)
+                await upsertRecord(tableName: "soldes_intermediares", record: payload, id: s.id.pg, existingIds: existingIds)
             }
         } catch {
             print("❌ Erreur soldes_intermediares: \(error)")
@@ -375,9 +386,10 @@ class SupabaseSync {
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: record)
 
-            if existingIds.contains(id) {
+            let key = id.lowercased()
+            if existingIds.contains(key) {
                 request.httpMethod = "PATCH"
-                request.url = URL(string: "\(baseURL)/rest/v1/\(tableName)?id=eq.\(id)")!
+                request.url = URL(string: "\(baseURL)/rest/v1/\(tableName)?id=eq.\(key)")!
             } else {
                 request.httpMethod = "POST"
             }
@@ -421,7 +433,7 @@ class SupabaseSync {
                       let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
                 else { return ids }
 
-                ids.formUnion(rows.compactMap { $0["id"] as? String })
+                ids.formUnion(rows.compactMap { ($0["id"] as? String)?.lowercased() })
                 if rows.count < pageSize { return ids }
                 offset += pageSize
             } catch {
@@ -878,6 +890,8 @@ class SupabaseSync {
 
         // ÉTAPE 1: ENVOYER les données locales vers Supabase (d'abord!)
         print("\n📤 ÉTAPE 1: Envoi données locales → Supabase")
+        await dedupeBalanceAccounts(from: container)
+        await dedupeSoldesIntermediaires(from: container)
         await syncDossiers(from: container)
         await syncExercices(from: container)
         await syncBalanceAccounts(from: container)

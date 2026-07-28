@@ -110,7 +110,7 @@ extension SupabaseSync {
         for row in rows {
             await upsertRecord(tableName: table,
                                record: payload(row),
-                               id: id(row).uuidString,
+                               id: id(row).pg,
                                existingIds: existingIds)
         }
     }
@@ -150,6 +150,80 @@ extension SupabaseSync {
     private func int(_ any: Any?) -> Int { (any as? NSNumber)?.intValue ?? 0 }
     private func uuid(_ any: Any?) -> UUID? { (any as? String).flatMap { UUID(uuidString: $0) } }
 
+    // MARK: - Dédoublonnage
+
+    /// Supprime les comptes de balance en double avant tout envoi.
+    ///
+    /// Tant que les identifiants étaient comparés en majuscules d'un côté et en
+    /// minuscules de l'autre, aucune correspondance n'était trouvée : chaque
+    /// machine créait sa propre ligne pour le même compte. La base distante a
+    /// ainsi accumulé deux exemplaires de nombreux comptes, rapatriés ensuite
+    /// en local. On ne garde qu'une ligne par (exercice, compte).
+    ///
+    /// Règle de conservation : la ligne du dernier import. Réimporter une
+    /// balance remplace la précédente, c'est donc la plus récente qui fait foi.
+    func dedupeBalanceAccounts(from container: ModelContainer) async {
+        let context = ModelContext(container)
+        guard let accounts = try? context.fetch(FetchDescriptor<BalanceAccount>()) else { return }
+
+        var best: [String: BalanceAccount] = [:]
+        var doomed: [BalanceAccount] = []
+
+        for account in accounts {
+            let key = "\(account.exerciceID.pg)|\(account.accountNumber)"
+            guard let current = best[key] else {
+                best[key] = account
+                continue
+            }
+            // Import le plus récent ; à égalité, identifiant le plus petit pour
+            // que les deux Macs retiennent la même ligne.
+            let keepsNew = (account.importDate, account.id.pg) > (current.importDate, current.id.pg)
+            best[key] = keepsNew ? account : current
+            doomed.append(keepsNew ? current : account)
+        }
+
+        guard !doomed.isEmpty else { return }
+        for account in doomed { context.delete(account) }
+        do {
+            try context.save()
+            print("🧹 Balance: \(doomed.count) doublons supprimés localement")
+        } catch {
+            print("⚠️ Dédoublonnage balance: \(error.localizedDescription)")
+        }
+    }
+
+    /// Ne conserve qu'un jeu de soldes intermédiaires par exercice.
+    ///
+    /// La vue SIG retient le premier enregistrement trouvé pour l'exercice :
+    /// avec plusieurs exemplaires, elle pouvait afficher un calcul périmé.
+    /// On garde le plus récemment mis à jour.
+    func dedupeSoldesIntermediaires(from container: ModelContainer) async {
+        let context = ModelContext(container)
+        guard let soldes = try? context.fetch(FetchDescriptor<SoldesIntermedialres>()) else { return }
+
+        var best: [UUID: SoldesIntermedialres] = [:]
+        var doomed: [SoldesIntermedialres] = []
+
+        for solde in soldes {
+            guard let current = best[solde.exerciceID] else {
+                best[solde.exerciceID] = solde
+                continue
+            }
+            let keepsNew = (solde.updatedAt, solde.id.pg) > (current.updatedAt, current.id.pg)
+            best[solde.exerciceID] = keepsNew ? solde : current
+            doomed.append(keepsNew ? current : solde)
+        }
+
+        guard !doomed.isEmpty else { return }
+        for solde in doomed { context.delete(solde) }
+        do {
+            try context.save()
+            print("🧹 SIG: \(doomed.count) doublons supprimés localement")
+        } catch {
+            print("⚠️ Dédoublonnage SIG: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Envoi (local → Supabase)
 
     /// Envoie tout le travail d'audit vers Supabase.
@@ -162,28 +236,28 @@ extension SupabaseSync {
 
         // Controles de revision (cle : exercice + cycle + item)
         await push("control_states", all(ControlState.self), label: "Contrôles",
-                   id: { Self.stableID($0.exerciceID.uuidString, $0.cycleRaw, $0.itemID) }) { c in
+                   id: { Self.stableID($0.exerciceID.pg, $0.cycleRaw, $0.itemID) }) { c in
             [
-                "id": Self.stableID(c.exerciceID.uuidString, c.cycleRaw, c.itemID).uuidString,
-                "exercice_id": c.exerciceID.uuidString,
+                "id": Self.stableID(c.exerciceID.pg, c.cycleRaw, c.itemID).pg,
+                "exercice_id": c.exerciceID.pg,
                 "cycle_raw": c.cycleRaw,
                 "item_id": c.itemID,
-                "statut_raw": c.statutRaw,
-                "note": c.note,
+                "status_raw": c.statutRaw,
+                "notes": c.note,
                 "updated_at": c.updatedAt.ISO8601Format()
             ]
         }
 
         // Justifications de comptes (cle : exercice + compte)
         await push("account_justifications", all(AccountJustification.self), label: "Justifications",
-                   id: { Self.stableID($0.exerciceID.uuidString, $0.accountNumber) }) { j in
+                   id: { Self.stableID($0.exerciceID.pg, $0.accountNumber) }) { j in
             var p: [String: Any] = [
-                "id": Self.stableID(j.exerciceID.uuidString, j.accountNumber).uuidString,
-                "exercice_id": j.exerciceID.uuidString,
+                "id": Self.stableID(j.exerciceID.pg, j.accountNumber).pg,
+                "exercice_id": j.exerciceID.pg,
                 "account_number": j.accountNumber,
-                "doc_name": j.docName,
-                "doc_path": j.docPath,
-                "note": j.note,
+                "file_name": j.docName,
+                "file_path": j.docPath,
+                "notes": j.note,
                 "updated_at": j.updatedAt.ISO8601Format()
             ]
             p["solde_justifie"] = j.soldeJustifie.map { self.safe($0) } ?? NSNull()
@@ -192,35 +266,62 @@ extension SupabaseSync {
 
         // Taux de TVA par compte (cle : exercice + compte)
         await push("tva_compte_taux", all(TvaCompteTaux.self), label: "Taux TVA",
-                   id: { Self.stableID($0.exerciceID.uuidString, $0.compte) }) { t in
+                   id: { Self.stableID($0.exerciceID.pg, $0.compte) }) { t in
             [
-                "id": Self.stableID(t.exerciceID.uuidString, t.compte).uuidString,
-                "exercice_id": t.exerciceID.uuidString,
+                "id": Self.stableID(t.exerciceID.pg, t.compte).pg,
+                "exercice_id": t.exerciceID.pg,
                 "compte": t.compte,
-                "taux": t.taux
+                "taux_raw": t.taux
             ]
         }
 
-        // Rapprochements bancaires (cle : exercice + compte)
-        await push("bank_reconciliations", all(BankReconciliation.self), label: "Rapprochements",
-                   id: { Self.stableID($0.exerciceID.uuidString, $0.accountNumber) }) { r in
+        // Rapprochements bancaires (cle : exercice + compte).
+        //
+        // Les elements de rapprochement pointent vers un rapprochement parent
+        // via une cle etrangere. Un element saisi sur un compte sans entete de
+        // rapprochement ferait donc echouer l'envoi : on complete la liste avec
+        // les parents manquants avant d'envoyer.
+        let reconItems = all(ReconItem.self)
+        let reconciliations = all(BankReconciliation.self)
+        var reconKeys = Set(reconciliations.map { Self.stableID($0.exerciceID.pg, $0.accountNumber) })
+
+        var reconPayloads: [(id: UUID, body: [String: Any])] = reconciliations.map { r in
+            let rid = Self.stableID(r.exerciceID.pg, r.accountNumber)
             var p: [String: Any] = [
-                "id": Self.stableID(r.exerciceID.uuidString, r.accountNumber).uuidString,
-                "exercice_id": r.exerciceID.uuidString,
-                "account_number": r.accountNumber,
+                "id": rid.pg,
+                "exercice_id": r.exerciceID.pg,
+                "compte_51": r.accountNumber,
                 "note": r.note,
                 "updated_at": r.updatedAt.ISO8601Format()
             ]
-            p["solde_extrait"] = r.soldeExtrait.map { self.safe($0) } ?? NSNull()
-            return p
+            p["solde_banque"] = r.soldeExtrait.map { self.safe($0) } ?? NSNull()
+            return (rid, p)
         }
 
-        // Elements de rapprochement (id propre)
-        await push("recon_items", all(ReconItem.self), label: "Éléments de rapprochement",
+        for item in reconItems {
+            let rid = Self.stableID(item.exerciceID.pg, item.accountNumber)
+            guard !reconKeys.contains(rid) else { continue }
+            reconKeys.insert(rid)
+            reconPayloads.append((rid, [
+                "id": rid.pg,
+                "exercice_id": item.exerciceID.pg,
+                "compte_51": item.accountNumber,
+                "note": "",
+                "solde_banque": NSNull(),
+                "updated_at": Date().ISO8601Format()
+            ]))
+        }
+
+        await push("bank_reconciliations", reconPayloads, label: "Rapprochements",
+                   id: { $0.id }) { $0.body }
+
+        // Elements de rapprochement (id propre, rattaches a leur rapprochement)
+        await push("recon_items", reconItems, label: "Éléments de rapprochement",
                    id: { $0.id }) { i in
             [
-                "id": i.id.uuidString,
-                "exercice_id": i.exerciceID.uuidString,
+                "id": i.id.pg,
+                "recon_id": Self.stableID(i.exerciceID.pg, i.accountNumber).pg,
+                "exercice_id": i.exerciceID.pg,
                 "account_number": i.accountNumber,
                 "libelle": i.libelle,
                 "montant": self.safe(i.montant),
@@ -233,8 +334,8 @@ extension SupabaseSync {
         // Declarations de TVA : lignes (id propre)
         await push("ca3_entries", all(Ca3Entry.self), label: "TVA — lignes", id: { $0.id }) { e in
             [
-                "id": e.id.uuidString,
-                "exercice_id": e.exerciceID.uuidString,
+                "id": e.id.pg,
+                "exercice_id": e.exerciceID.pg,
                 "periode": e.periode,
                 "taux": e.taux,
                 "base": self.safe(e.base),
@@ -245,10 +346,10 @@ extension SupabaseSync {
 
         // Declarations de TVA : periodes (cle : exercice + periode)
         await push("ca3_periods", all(Ca3Period.self), label: "TVA — périodes",
-                   id: { Self.stableID($0.exerciceID.uuidString, $0.periode) }) { p in
+                   id: { Self.stableID($0.exerciceID.pg, $0.periode) }) { p in
             [
-                "id": Self.stableID(p.exerciceID.uuidString, p.periode).uuidString,
-                "exercice_id": p.exerciceID.uuidString,
+                "id": Self.stableID(p.exerciceID.pg, p.periode).pg,
+                "exercice_id": p.exerciceID.pg,
                 "periode": p.periode,
                 "tva_deductible": self.safe(p.tvaDeductible),
                 "credit_m1": self.safe(p.creditM1),
@@ -262,8 +363,8 @@ extension SupabaseSync {
         // Factures d'investissement (id propre)
         await push("immo_invoices", all(ImmoInvoice.self), label: "Factures immo", id: { $0.id }) { f in
             [
-                "id": f.id.uuidString,
-                "exercice_id": f.exerciceID.uuidString,
+                "id": f.id.pg,
+                "exercice_id": f.exerciceID.pg,
                 "date": f.date.ISO8601Format(),
                 "compte": f.compte,
                 "designation": f.designation,
@@ -277,8 +378,8 @@ extension SupabaseSync {
         // Mouvements de classe 2 (id propre)
         await push("class2_movements", all(Class2Movement.self), label: "Mouvements classe 2", id: { $0.id }) { m in
             [
-                "id": m.id.uuidString,
-                "exercice_id": m.exerciceID.uuidString,
+                "id": m.id.pg,
+                "exercice_id": m.exerciceID.pg,
                 "date": m.date.ISO8601Format(),
                 "compte": m.compte,
                 "libelle": m.libelle,
@@ -291,10 +392,10 @@ extension SupabaseSync {
 
         // Regles de cycle par compte (cle : dossier + compte)
         await push("account_cycle_rules", all(AccountCycleRule.self), label: "Règles de cycle",
-                   id: { Self.stableID($0.dossierID.uuidString, $0.accountNumber) }) { r in
+                   id: { Self.stableID($0.dossierID.pg, $0.accountNumber) }) { r in
             [
-                "id": Self.stableID(r.dossierID.uuidString, r.accountNumber).uuidString,
-                "dossier_id": r.dossierID.uuidString,
+                "id": Self.stableID(r.dossierID.pg, r.accountNumber).pg,
+                "dossier_id": r.dossierID.pg,
                 "account_number": r.accountNumber,
                 "cycle_raw": r.cycleRaw
             ]
@@ -331,7 +432,7 @@ extension SupabaseSync {
         guard let rows = await fetchRows("control_states", label: "Contrôles") else { return }
         let locals = (try? context.fetch(FetchDescriptor<ControlState>())) ?? []
         var byKey = Dictionary(locals.map {
-            (Self.stableID($0.exerciceID.uuidString, $0.cycleRaw, $0.itemID), $0)
+            (Self.stableID($0.exerciceID.pg, $0.cycleRaw, $0.itemID), $0)
         }, uniquingKeysWith: { first, _ in first })
 
         var added = 0, merged = 0
@@ -341,16 +442,16 @@ extension SupabaseSync {
             let remote = date(r["updated_at"]) ?? .distantPast
             if let local = byKey[id] {
                 guard remote > local.updatedAt else { continue }
-                local.statutRaw = str(r["statut_raw"])
-                local.note = str(r["note"])
+                local.statutRaw = str(r["status_raw"])
+                local.note = str(r["notes"])
                 local.updatedAt = remote
                 merged += 1
             } else {
                 let c = ControlState(exerciceID: exID,
                                      cycleRaw: str(r["cycle_raw"]),
                                      itemID: str(r["item_id"]),
-                                     statut: ControlStatus(rawValue: str(r["statut_raw"])) ?? .aFaire,
-                                     note: str(r["note"]),
+                                     statut: ControlStatus(rawValue: str(r["status_raw"])) ?? .aFaire,
+                                     note: str(r["notes"]),
                                      updatedAt: remote)
                 context.insert(c)
                 byKey[id] = c
@@ -364,7 +465,7 @@ extension SupabaseSync {
         guard let rows = await fetchRows("account_justifications", label: "Justifications") else { return }
         let locals = (try? context.fetch(FetchDescriptor<AccountJustification>())) ?? []
         var byKey = Dictionary(locals.map {
-            (Self.stableID($0.exerciceID.uuidString, $0.accountNumber), $0)
+            (Self.stableID($0.exerciceID.pg, $0.accountNumber), $0)
         }, uniquingKeysWith: { first, _ in first })
 
         var added = 0, merged = 0
@@ -375,21 +476,21 @@ extension SupabaseSync {
             if let local = byKey[id] {
                 guard remote > local.updatedAt else { continue }
                 local.soldeJustifie = solde
-                local.note = str(r["note"])
+                local.note = str(r["notes"])
                 // Les chemins de pieces sont propres a chaque Mac : on ne remplace
                 // un chemin local existant que s'il est vide.
                 if local.docPath.isEmpty {
-                    local.docName = str(r["doc_name"])
-                    local.docPath = str(r["doc_path"])
+                    local.docName = str(r["file_name"])
+                    local.docPath = str(r["file_path"])
                 }
                 local.updatedAt = remote
                 merged += 1
             } else {
                 let j = AccountJustification(exerciceID: exID, accountNumber: str(r["account_number"]))
                 j.soldeJustifie = solde
-                j.docName = str(r["doc_name"])
-                j.docPath = str(r["doc_path"])
-                j.note = str(r["note"])
+                j.docName = str(r["file_name"])
+                j.docPath = str(r["file_path"])
+                j.note = str(r["notes"])
                 j.updatedAt = remote
                 context.insert(j)
                 byKey[id] = j
@@ -403,16 +504,16 @@ extension SupabaseSync {
         guard let rows = await fetchRows("tva_compte_taux", label: "Taux TVA") else { return }
         let locals = (try? context.fetch(FetchDescriptor<TvaCompteTaux>())) ?? []
         var byKey = Dictionary(locals.map {
-            (Self.stableID($0.exerciceID.uuidString, $0.compte), $0)
+            (Self.stableID($0.exerciceID.pg, $0.compte), $0)
         }, uniquingKeysWith: { first, _ in first })
 
         var added = 0
         for r in rows {
             guard let id = uuid(r["id"]), let exID = uuid(r["exercice_id"]) else { continue }
             if let local = byKey[id] {
-                local.taux = str(r["taux"])
+                local.taux = str(r["taux_raw"])
             } else {
-                let t = TvaCompteTaux(exerciceID: exID, compte: str(r["compte"]), taux: str(r["taux"]))
+                let t = TvaCompteTaux(exerciceID: exID, compte: str(r["compte"]), taux: str(r["taux_raw"]))
                 context.insert(t)
                 byKey[id] = t
                 added += 1
@@ -425,14 +526,14 @@ extension SupabaseSync {
         guard let rows = await fetchRows("bank_reconciliations", label: "Rapprochements") else { return }
         let locals = (try? context.fetch(FetchDescriptor<BankReconciliation>())) ?? []
         var byKey = Dictionary(locals.map {
-            (Self.stableID($0.exerciceID.uuidString, $0.accountNumber), $0)
+            (Self.stableID($0.exerciceID.pg, $0.accountNumber), $0)
         }, uniquingKeysWith: { first, _ in first })
 
         var added = 0, merged = 0
         for r in rows {
             guard let id = uuid(r["id"]), let exID = uuid(r["exercice_id"]) else { continue }
             let remote = date(r["updated_at"]) ?? .distantPast
-            let solde = r["solde_extrait"] is NSNull ? nil : (r["solde_extrait"] as? NSNumber)?.doubleValue
+            let solde = r["solde_banque"] is NSNull ? nil : (r["solde_banque"] as? NSNumber)?.doubleValue
             if let local = byKey[id] {
                 guard remote > local.updatedAt else { continue }
                 local.soldeExtrait = solde
@@ -440,7 +541,7 @@ extension SupabaseSync {
                 local.updatedAt = remote
                 merged += 1
             } else {
-                let b = BankReconciliation(exerciceID: exID, accountNumber: str(r["account_number"]))
+                let b = BankReconciliation(exerciceID: exID, accountNumber: str(r["compte_51"]))
                 b.soldeExtrait = solde
                 b.note = str(r["note"])
                 b.updatedAt = remote
@@ -515,7 +616,7 @@ extension SupabaseSync {
         guard let rows = await fetchRows("ca3_periods", label: "TVA — périodes") else { return }
         let locals = (try? context.fetch(FetchDescriptor<Ca3Period>())) ?? []
         var byKey = Dictionary(locals.map {
-            (Self.stableID($0.exerciceID.uuidString, $0.periode), $0)
+            (Self.stableID($0.exerciceID.pg, $0.periode), $0)
         }, uniquingKeysWith: { first, _ in first })
 
         var added = 0
@@ -639,7 +740,7 @@ extension SupabaseSync {
         guard let rows = await fetchRows("account_cycle_rules", label: "Règles de cycle") else { return }
         let locals = (try? context.fetch(FetchDescriptor<AccountCycleRule>())) ?? []
         var byKey = Dictionary(locals.map {
-            (Self.stableID($0.dossierID.uuidString, $0.accountNumber), $0)
+            (Self.stableID($0.dossierID.pg, $0.accountNumber), $0)
         }, uniquingKeysWith: { first, _ in first })
 
         var added = 0
@@ -667,7 +768,7 @@ extension SupabaseSync {
     /// eviter qu'elle ne reapparaisse a la synchronisation suivante.
     func deleteRemote(table: String, id: UUID) async {
         do {
-            let url = URL(string: "\(baseURL)/rest/v1/\(table)?id=eq.\(id.uuidString)")!
+            let url = URL(string: "\(baseURL)/rest/v1/\(table)?id=eq.\(id.pg)")!
             var request = URLRequest(url: url)
             request.httpMethod = "DELETE"
             let (_, response) = try await session.data(for: request)
