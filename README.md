@@ -55,7 +55,7 @@ et le push.
 
 ### Supabase
 
-Deux scripts SQL, à coller dans **Supabase Studio → SQL Editor**. Ils sont
+Trois scripts SQL, à coller dans **Supabase Studio → SQL Editor**. Ils sont
 idempotents : les rejouer ne casse rien.
 
 | Fichier | Rôle |
