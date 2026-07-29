@@ -361,7 +361,9 @@ extension SupabaseSync {
                 "ca_ht": self.safe(p.caHT),
                 "ligne16": self.safe(p.ligne16),
                 "ligne19": self.safe(p.ligne19),
-                "ligne20": self.safe(p.ligne20)
+                "ligne20": self.safe(p.ligne20),
+                "doc_name": p.docName,
+                "doc_path": p.docPath
             ]
         }
 
@@ -425,6 +427,7 @@ extension SupabaseSync {
         docs += paths(AccountJustification.self) { ($0.docPath, $0.exerciceID) }
         docs += paths(ReconItem.self) { ($0.docPath, $0.exerciceID) }
         docs += paths(ImmoInvoice.self) { ($0.docPath, $0.exerciceID) }
+        docs += paths(Ca3Period.self) { ($0.docPath, $0.exerciceID) }
 
         // Seuls les fichiers réellement présents sur cette machine sont candidats.
         let local = docs.filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -684,6 +687,11 @@ extension SupabaseSync {
             target.ligne16 = dbl(r["ligne16"])
             target.ligne19 = dbl(r["ligne19"])
             target.ligne20 = dbl(r["ligne20"])
+            // Chemin propre a chaque Mac : on ne remplace que s'il est vide.
+            if target.docPath.isEmpty {
+                target.docName = str(r["doc_name"])
+                target.docPath = str(r["doc_path"])
+            }
         }
         print("  ✅ TVA périodes: \(added) ajoutées")
     }

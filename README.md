@@ -62,6 +62,7 @@ idempotents : les rejouer ne casse rien.
 |---|---|
 | `supabase_schema.sql` | Tables du travail d'audit et points en suspens |
 | `supabase_storage.sql` | Dépôt des pièces justificatives (bucket privé) |
+| `supabase_ca3_pdf.sql` | Colonnes portant le PDF de chaque déclaration de TVA |
 
 Ces scripts ne peuvent pas être exécutés depuis l'application : la clé
 publishable n'a pas les droits nécessaires.

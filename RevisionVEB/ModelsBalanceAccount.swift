@@ -358,8 +358,14 @@ final class Ca3Period {
     var ligne19: Double = 0         // TVA déductible sur immobilisations (ligne 19)
     var ligne20: Double = 0         // TVA déductible sur autres biens et services (ligne 20)
 
+    // La déclaration elle-même : le PDF importé était jusqu'ici analysé puis
+    // perdu, alors que c'est la pièce que réclame l'expert-comptable.
+    var docName: String = ""
+    var docPath: String = ""
+
     init(exerciceID: UUID, periode: String, tvaDeductible: Double = 0, creditM1: Double = 0,
-         caHT: Double = 0, ligne16: Double = 0, ligne19: Double = 0, ligne20: Double = 0) {
+         caHT: Double = 0, ligne16: Double = 0, ligne19: Double = 0, ligne20: Double = 0,
+         docName: String = "", docPath: String = "") {
         self.exerciceID = exerciceID
         self.periode = periode
         self.tvaDeductible = tvaDeductible
@@ -368,9 +374,13 @@ final class Ca3Period {
         self.ligne16 = ligne16
         self.ligne19 = ligne19
         self.ligne20 = ligne20
+        self.docName = docName
+        self.docPath = docPath
     }
 
     var ligne23: Double { ligne19 + ligne20 + creditM1 }   // total TVA déductible
+
+    var hasDocument: Bool { !docPath.isEmpty }
 }
 
 /// Aides TVA : taux predefinis + detection du taux depuis un libelle de compte.

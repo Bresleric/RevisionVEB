@@ -417,6 +417,7 @@ enum DossierExport {
         let ca3Periodes = ((try? context.fetch(FetchDescriptor<Ca3Period>())) ?? [])
             .filter { $0.exerciceID == exercice.id }
 
+        var manquantsCA3: [String] = []
         if !ca3Lines.isEmpty || !ca3Periodes.isEmpty {
             /// Deux decimales et virgule decimale : les montants de TVA se
             /// rapprochent au centime, et Excel francais attend la virgule.
@@ -464,6 +465,27 @@ enum DossierExport {
                     detail += "\(e.periode);\(taux);\(eur(e.base));\(eur(e.tva))\n"
                 }
                 try? detail.data(using: .utf8)?.write(to: root.appendingPathComponent("TVA - Détail CA3.csv"))
+            }
+
+            // Les declarations elles-memes, dans un dossier a part : l'expert-
+            // comptable les cherche en tant que telles, pas melees aux pieces
+            // des comptes.
+            let avecPdf = ca3Periodes.filter { !$0.docPath.isEmpty }
+            if !avecPdf.isEmpty {
+                let dossierCA3 = root.appendingPathComponent("Déclarations TVA", isDirectory: true)
+                try? fm.createDirectory(at: dossierCA3, withIntermediateDirectories: true)
+                for periode in avecPdf.sorted(by: { $0.periode < $1.periode }) {
+                    let nom = URL(fileURLWithPath: periode.docPath).lastPathComponent
+                    guard let src = await resolveJustificatif(path: periode.docPath) else {
+                        manquantsCA3.append("CA3 \(periode.periode) - \(nom)")
+                        continue
+                    }
+                    let ext = URL(fileURLWithPath: nom).pathExtension
+                    let dest = dossierCA3.appendingPathComponent("CA3 \(periode.periode).\(ext.isEmpty ? "pdf" : ext)")
+                    try? fm.removeItem(at: dest)
+                    do { try fm.copyItem(at: src, to: dest) }
+                    catch { manquantsCA3.append("CA3 \(periode.periode) - \(nom)") }
+                }
             }
         }
 
@@ -547,6 +569,7 @@ enum DossierExport {
         guard let zip = zipURL else { return }
 
         // Bilan : mieux vaut un export annonce incomplet qu'un export mutile.
+        manquants += manquantsCA3
         if !manquants.isEmpty {
             let alert = NSAlert()
             alert.messageText = "\(manquants.count) pièce\(manquants.count > 1 ? "s" : "") absente\(manquants.count > 1 ? "s" : "") de l'export"
@@ -2314,10 +2337,18 @@ struct TvaControlView: View {
                 modelContext.insert(Ca3Entry(exerciceID: exerciceID, periode: res.periode,
                                              taux: line.taux, base: line.base, tva: line.taxe, ordre: i))
             }
+            // La déclaration est conservée dans le conteneur de l'app : c'est la
+            // pièce justificative de la période, attendue dans l'export.
+            let copied = JustificatifStore.copyIn(source: url, exerciceID: exerciceID,
+                                                  accountNumber: "CA3 \(res.periode)")
+
             modelContext.insert(Ca3Period(exerciceID: exerciceID, periode: res.periode,
                                           tvaDeductible: res.deductible, creditM1: res.creditM1,
                                           caHT: res.caHT, ligne16: res.ligne16,
-                                          ligne19: res.ligne19, ligne20: res.ligne20))
+                                          ligne19: res.ligne19, ligne20: res.ligne20,
+                                          docName: copied?.name ?? "",
+                                          docPath: copied?.path ?? ""))
+            if let path = copied?.path { uploadJustificatif(path: path) }
             imported += 1
         }
         try? modelContext.save()
