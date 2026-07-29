@@ -182,8 +182,8 @@ struct SidebarView: View {
                 row(.settings)
                 Button {
                     isExporting = true
-                    DispatchQueue.main.async {
-                        DossierExport.export(dossier: dossier, exercice: exercice, context: modelContext)
+                    Task {
+                        await DossierExport.export(dossier: dossier, exercice: exercice, context: modelContext)
                         isExporting = false
                     }
                 } label: {
@@ -320,7 +320,7 @@ enum DataBackup {
 
 enum DossierExport {
     @MainActor
-    static func export(dossier: Dossier, exercice: Exercice, context: ModelContext) {
+    static func export(dossier: Dossier, exercice: Exercice, context: ModelContext) async {
         let fm = FileManager.default
         let safeName = "\(dossier.nom) - Exercice \(exercice.libelle)"
             .replacingOccurrences(of: "/", with: "-")
@@ -411,31 +411,41 @@ enum DossierExport {
             try? sus.data(using: .utf8)?.write(to: root.appendingPathComponent("PointsEnSuspens.csv"))
         }
 
-        // Justificatifs (classes par cycle)
+        // Justificatifs (classes par cycle).
+        //
+        // Le chemin enregistre est celui du Mac qui a rattache la piece : sur
+        // l'autre machine il ne mene nulle part. On resout donc chaque document
+        // — conteneur local, puis Supabase — et on retient ceux qu'on n'a pas pu
+        // obtenir, pour le dire plutot que de livrer un export incomplet en
+        // silence.
         let pieces = root.appendingPathComponent("Justificatifs", isDirectory: true)
         try? fm.createDirectory(at: pieces, withIntermediateDirectories: true)
-        for j in justifs where !j.docPath.isEmpty {
-            let src = URL(fileURLWithPath: j.docPath)
-            let cyc = (rDict[j.accountNumber] ?? RevisionCycle.forAccount(j.accountNumber)).letter
-            let dest = pieces.appendingPathComponent("\(cyc) - \(src.lastPathComponent)")
+        var manquants: [String] = []
+
+        func joindre(_ docPath: String, prefixe: String) async {
+            let nom = URL(fileURLWithPath: docPath).lastPathComponent
+            guard let src = await resolveJustificatif(path: docPath) else {
+                manquants.append("\(prefixe) - \(nom)")
+                return
+            }
+            let dest = pieces.appendingPathComponent("\(prefixe) - \(nom)")
             try? fm.removeItem(at: dest)
-            try? fm.copyItem(at: src, to: dest)
+            do { try fm.copyItem(at: src, to: dest) } catch { manquants.append("\(prefixe) - \(nom)") }
+        }
+
+        for j in justifs where !j.docPath.isEmpty {
+            let cyc = (rDict[j.accountNumber] ?? RevisionCycle.forAccount(j.accountNumber)).letter
+            await joindre(j.docPath, prefixe: cyc)
         }
         // Pieces des elements de rapprochement
         for it in reconItems where !it.docPath.isEmpty {
-            let src = URL(fileURLWithPath: it.docPath)
-            let dest = pieces.appendingPathComponent("B (rappro) - \(src.lastPathComponent)")
-            try? fm.removeItem(at: dest)
-            try? fm.copyItem(at: src, to: dest)
+            await joindre(it.docPath, prefixe: "B (rappro)")
         }
         // Factures d'investissement (cycle G)
         let immoInv = ((try? context.fetch(FetchDescriptor<ImmoInvoice>())) ?? [])
             .filter { $0.exerciceID == exercice.id }
         for inv in immoInv where !inv.docPath.isEmpty {
-            let src = URL(fileURLWithPath: inv.docPath)
-            let dest = pieces.appendingPathComponent("G - immo - \(src.lastPathComponent)")
-            try? fm.removeItem(at: dest)
-            try? fm.copyItem(at: src, to: dest)
+            await joindre(inv.docPath, prefixe: "G - immo")
         }
         if !immoInv.isEmpty {
             var txt = "Factures d'investissement (immobilisations)\n\(dossier.nom) — Exercice \(exercice.libelle)\n\n"
@@ -479,6 +489,24 @@ enum DossierExport {
             zipURL = z
         }
         guard let zip = zipURL else { return }
+
+        // Bilan : mieux vaut un export annonce incomplet qu'un export mutile.
+        if !manquants.isEmpty {
+            let alert = NSAlert()
+            alert.messageText = "\(manquants.count) pièce\(manquants.count > 1 ? "s" : "") absente\(manquants.count > 1 ? "s" : "") de l'export"
+            alert.informativeText = """
+                Ces documents n'ont pas pu être récupérés, ni sur cette machine \
+                ni depuis Supabase :
+
+                \(manquants.prefix(12).joined(separator: "\n"))\
+                \(manquants.count > 12 ? "\n… et \(manquants.count - 12) autre(s)" : "")
+
+                Ouvre le dossier sur le Mac où elles ont été rattachées : elles \
+                seront déposées à la prochaine synchronisation.
+                """
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
 
         // Enregistrement choisi par l'utilisateur
         let panel = NSSavePanel()
@@ -942,6 +970,30 @@ enum JustificatifStore {
     }
 }
 
+/// Localise une piece justificative, en la recuperant si besoin.
+///
+/// Le chemin enregistre en base est celui du Mac qui a rattache la piece. On
+/// essaie successivement : ce chemin, le conteneur de cette machine, puis
+/// Supabase. Renvoie `nil` si la piece reste introuvable.
+@MainActor
+func resolveJustificatif(path: String) async -> URL? {
+    guard !path.isEmpty else { return nil }
+    let fm = FileManager.default
+
+    if fm.fileExists(atPath: path) { return URL(fileURLWithPath: path) }
+
+    guard let remote = SupabaseStorage.remotePath(forLocalPath: path),
+          let exerciceID = UUID(uuidString: URL(fileURLWithPath: path)
+              .deletingLastPathComponent().lastPathComponent)
+    else { return nil }
+
+    let local = JustificatifStore.dir(forExercice: exerciceID)
+        .appendingPathComponent(URL(fileURLWithPath: path).lastPathComponent)
+    if fm.fileExists(atPath: local.path) { return local }
+
+    return await SupabaseStorage.download(remotePath: remote, to: local)
+}
+
 /// Depose la piece sur Supabase des son rattachement.
 ///
 /// La synchronisation complete ne tourne qu'au lancement : sans cet envoi
@@ -970,29 +1022,14 @@ func openJustificationDocument(path: String, bookmark: Data?) {
 
     guard !path.isEmpty else { return }
 
-    // Le chemin enregistré est celui du Mac qui a rattaché la pièce. Sur l'autre
-    // machine il ne mène nulle part : on cherche d'abord la pièce dans le
-    // conteneur local, puis on la récupère depuis Supabase si besoin.
+    // Cas courant : la pièce est là, on ouvre sans détour.
     if FileManager.default.fileExists(atPath: path) {
         NSWorkspace.shared.open(URL(fileURLWithPath: path))
         return
     }
 
-    guard let remote = SupabaseStorage.remotePath(forLocalPath: path),
-          let exerciceID = UUID(uuidString: URL(fileURLWithPath: path)
-              .deletingLastPathComponent().lastPathComponent)
-    else { return }
-
-    let local = JustificatifStore.dir(forExercice: exerciceID)
-        .appendingPathComponent(URL(fileURLWithPath: path).lastPathComponent)
-
-    if FileManager.default.fileExists(atPath: local.path) {
-        NSWorkspace.shared.open(local)
-        return
-    }
-
     Task { @MainActor in
-        if let fetched = await SupabaseStorage.download(remotePath: remote, to: local) {
+        if let fetched = await resolveJustificatif(path: path) {
             NSWorkspace.shared.open(fetched)
         } else {
             let alert = NSAlert()
