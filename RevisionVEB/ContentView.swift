@@ -411,6 +411,62 @@ enum DossierExport {
             try? sus.data(using: .utf8)?.write(to: root.appendingPathComponent("PointsEnSuspens.csv"))
         }
 
+        // Declarations de TVA (CA3)
+        let ca3Lines = ((try? context.fetch(FetchDescriptor<Ca3Entry>())) ?? [])
+            .filter { $0.exerciceID == exercice.id }
+        let ca3Periodes = ((try? context.fetch(FetchDescriptor<Ca3Period>())) ?? [])
+            .filter { $0.exerciceID == exercice.id }
+
+        if !ca3Lines.isEmpty || !ca3Periodes.isEmpty {
+            /// Deux decimales et virgule decimale : les montants de TVA se
+            /// rapprochent au centime, et Excel francais attend la virgule.
+            func eur(_ d: Double) -> String {
+                String(format: "%.2f", d).replacingOccurrences(of: ".", with: ",")
+            }
+
+            let parPeriode = Dictionary(ca3Periodes.map { ($0.periode, $0) },
+                                        uniquingKeysWith: { _, l in l })
+            let periodes = Set(ca3Lines.map { $0.periode })
+                .union(ca3Periodes.map { $0.periode })
+                .filter { !$0.isEmpty }
+                .sorted()
+
+            var recap = "Période;CA HT déclaré;TVA collectée;Ligne 16 (TVA brute due);"
+            recap += "Ligne 19 (immobilisations);Ligne 20 (biens et services);Ligne 22 (crédit M-1);"
+            recap += "Ligne 23 (total déductible);TVA à payer (16 - 23)\n"
+
+            var tCa = 0.0, tColl = 0.0, tL23 = 0.0, tNet = 0.0
+            for p in periodes {
+                let periode = parPeriode[p]
+                let collectee = ca3Lines.filter { $0.periode == p }.reduce(0) { $0 + $1.tva }
+                let deductible = periode?.tvaDeductible ?? 0
+                let creditM1 = periode?.creditM1 ?? 0
+                let ligne23 = deductible + creditM1
+                // Résultat de la déclaration : ligne 16 moins le total déductible,
+                // report du mois précédent compris. Un montant négatif est le
+                // crédit reporté sur la période suivante.
+                let brute = (periode?.ligne16 ?? 0) != 0 ? (periode?.ligne16 ?? 0) : collectee
+                let net = brute - ligne23
+
+                recap += "\(p);\(eur(periode?.caHT ?? 0));\(eur(collectee));\(eur(brute));"
+                recap += "\(eur(periode?.ligne19 ?? 0));\(eur(periode?.ligne20 ?? 0));\(eur(creditM1));"
+                recap += "\(eur(ligne23));\(eur(net))\n"
+
+                tCa += periode?.caHT ?? 0; tColl += collectee; tL23 += ligne23; tNet += net
+            }
+            recap += "TOTAL;\(eur(tCa));\(eur(tColl));;;;;\(eur(tL23));\(eur(tNet))\n"
+            try? recap.data(using: .utf8)?.write(to: root.appendingPathComponent("TVA - Déclarations CA3.csv"))
+
+            if !ca3Lines.isEmpty {
+                var detail = "Période;Taux;Base HT;TVA\n"
+                for e in ca3Lines.sorted(by: { ($0.periode, $0.ordre) < ($1.periode, $1.ordre) }) {
+                    let taux = e.taux.isEmpty ? "" : (e.taux == "Exo" ? "Exonéré" : "\(e.taux)%")
+                    detail += "\(e.periode);\(taux);\(eur(e.base));\(eur(e.tva))\n"
+                }
+                try? detail.data(using: .utf8)?.write(to: root.appendingPathComponent("TVA - Détail CA3.csv"))
+            }
+        }
+
         // Justificatifs (classes par cycle).
         //
         // Le chemin enregistre est celui du Mac qui a rattache la piece : sur
