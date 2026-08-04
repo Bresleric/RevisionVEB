@@ -102,6 +102,7 @@ enum NavSection: Hashable, Identifiable {
     case dashboard
     case importData
     case chartOfAccounts
+    case documents
     case cycle(RevisionCycle)
     case settings
 
@@ -110,6 +111,7 @@ enum NavSection: Hashable, Identifiable {
         case .dashboard:        return "dashboard"
         case .importData:       return "import"
         case .chartOfAccounts:  return "plan-comptable"
+        case .documents:        return "documents"
         case .cycle(let c):     return "cycle-\(c.rawValue)"
         case .settings:         return "settings"
         }
@@ -120,6 +122,7 @@ enum NavSection: Hashable, Identifiable {
         case .dashboard:        return "Dashboard"
         case .importData:       return "Import"
         case .chartOfAccounts:  return "Plan comptable"
+        case .documents:        return "Pièces du dossier"
         case .cycle(let c):     return c.rawValue
         case .settings:         return "Réglages"
         }
@@ -130,6 +133,7 @@ enum NavSection: Hashable, Identifiable {
         case .dashboard:        return "gauge.with.dots.needle.67percent"
         case .importData:       return "arrow.down.doc"
         case .chartOfAccounts:  return "list.bullet.rectangle"
+        case .documents:        return "folder.badge.person.crop"
         case .cycle(let c):     return c.icon
         case .settings:         return "gearshape"
         }
@@ -170,6 +174,7 @@ struct SidebarView: View {
                 row(.dashboard)
                 row(.importData)
                 row(.chartOfAccounts)
+                row(.documents)
             }
 
             Section("Cycles de révision") {
@@ -616,6 +621,8 @@ struct DetailContentView: View {
                 ImportView(exerciceID: exerciceID)
             case .chartOfAccounts:
                 ChartOfAccountsView(exerciceID: exerciceID, dossierID: dossierID)
+            case .documents:
+                DocumentsView(exerciceID: exerciceID, dossierID: dossierID)
             case .cycle(let cycle):
                 CycleBalanceView(cycle: cycle, exerciceID: exerciceID, dossierID: dossierID)
             case .settings:
