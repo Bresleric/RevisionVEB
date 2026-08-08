@@ -455,6 +455,32 @@ final class ReconItem {
     var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
 }
 
+/// Document de circularisation (confirmations bancaires, tiers, etc.).
+@Model
+final class CirculationDocument {
+    var id: UUID = UUID()
+    var exerciceID: UUID = UUID()
+    var date: Date = Date()
+    var type: String = ""        // "Banque", "Tiers", etc.
+    var designation: String = "" // nom banque / organisme
+    var docName: String = ""
+    var docPath: String = ""
+    var docBookmark: Data? = nil
+    var ordre: Int = 0
+
+    init(id: UUID = UUID(), exerciceID: UUID, date: Date = Date(), type: String = "",
+         designation: String = "", ordre: Int = 0) {
+        self.id = id
+        self.exerciceID = exerciceID
+        self.date = date
+        self.type = type
+        self.designation = designation
+        self.ordre = ordre
+    }
+
+    var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
+}
+
 /// Mouvement du grand livre classe 2 (immobilisations) importe de Cegid.
 @Model
 final class Class2Movement {

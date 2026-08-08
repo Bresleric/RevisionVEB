@@ -540,6 +540,22 @@ enum DossierExport {
             }
             try? txt.data(using: .utf8)?.write(to: root.appendingPathComponent("Immobilisations.csv"))
         }
+        // Documents de circularisation (cycle G)
+        let circulationDocs = ((try? context.fetch(FetchDescriptor<CirculationDocument>())) ?? [])
+            .filter { $0.exerciceID == exercice.id }
+        for doc in circulationDocs where !doc.docPath.isEmpty {
+            await joindre(doc.docPath, prefixe: "D - circularisation")
+        }
+        if !circulationDocs.isEmpty {
+            var txt = "Documents de circularisation\n\(dossier.nom) — Exercice \(exercice.libelle)\n\n"
+            txt += "Date;Type;Désignation;Document\n"
+            let df = DateFormatter(); df.dateFormat = "dd/MM/yyyy"
+            for doc in circulationDocs.sorted(by: { $0.ordre < $1.ordre }) {
+                let d = doc.designation.replacingOccurrences(of: ";", with: ",")
+                txt += "\(df.string(from: doc.date));\(doc.type);\(d);\(doc.docName)\n"
+            }
+            try? txt.data(using: .utf8)?.write(to: root.appendingPathComponent("Circularisation.csv"))
+        }
 
         // Rapprochements.txt
         if !recons.isEmpty {
@@ -775,7 +791,8 @@ struct CycleBalanceView: View {
                     if cycle == .immobilisations {
                         Text("Factures").tag(5)
                         Text("Mouvements").tag(6)
-                        Text("Amortissements").tag(7)
+                        Text("Circularisation").tag(7)
+                        Text("Amortissements").tag(8)
                     }
                     Text("Contrôles").tag(2)
                     Text(pendingTabLabel).tag(4)
@@ -802,6 +819,8 @@ struct CycleBalanceView: View {
             } else if tab == 6 && cycle == .immobilisations {
                 Class2MovementsView(exerciceID: exerciceID)
             } else if tab == 7 && cycle == .immobilisations {
+                CirculationDocumentsView(exerciceID: exerciceID)
+            } else if tab == 8 && cycle == .immobilisations {
                 ImmoAssetsView(exerciceID: exerciceID)
             } else if accounts.isEmpty {
                 if exerciceAccounts.isEmpty {
@@ -3301,6 +3320,111 @@ struct ImmoAssetsView: View {
         let msg = "\(totalInserted) biens importés"
         print("✅ ImportExcel: \(msg)")
         importMsg = msg
+    }
+}
+
+// MARK: - Documents de circularisation (confirmations bancaires, tiers)
+
+struct CirculationDocumentsView: View {
+    let exerciceID: UUID
+
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allDocs: [CirculationDocument]
+
+    @State private var showImporter = false
+    @State private var docToSelect: CirculationDocument?
+
+    private var docs: [CirculationDocument] {
+        allDocs.filter { $0.exerciceID == exerciceID }.sorted { $0.ordre < $1.ordre }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Circularisation").font(.headline)
+                Text("Confirmations directes des banques et tiers. Incluses dans l'export expert-comptable.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding([.horizontal, .top])
+
+            List {
+                HStack {
+                    Text("Date").frame(width: 90, alignment: .leading)
+                    Text("Type").frame(width: 100, alignment: .leading)
+                    Text("Désignation / Organisme").frame(maxWidth: .infinity, alignment: .leading)
+                    Text("Document").frame(width: 150, alignment: .leading)
+                    Text("").frame(width: 28)
+                }
+                .font(.caption).foregroundStyle(.secondary)
+
+                ForEach(docs) { doc in
+                    CirculationDocumentRow(
+                        document: doc,
+                        onCommit: { try? modelContext.save() },
+                        onDelete: { removeDoc(doc); modelContext.delete(doc); try? modelContext.save() },
+                        onLink: { docToSelect = doc; showImporter = true },
+                        onOpen: { openJustificationDocument(path: doc.docPath, bookmark: doc.docBookmark) },
+                        onRemoveDoc: { removeDoc(doc); try? modelContext.save() }
+                    )
+                }
+
+                HStack {
+                    Button { modelContext.insert(CirculationDocument(exerciceID: exerciceID, ordre: docs.count))
+                        try? modelContext.save()
+                    } label: { Label("Ajouter un document", systemImage: "plus.circle") }
+                    Spacer()
+                }
+                .font(.callout)
+            }
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.item], allowsMultipleSelection: false) { result in
+            if case .success(let urls) = result, let url = urls.first, let sel = docToSelect { attachDoc(sel, url) }
+            docToSelect = nil
+        }
+    }
+
+    private func attachDoc(_ doc: CirculationDocument, _ url: URL) {
+        guard let copied = JustificatifStore.copyIn(source: url, exerciceID: exerciceID, accountNumber: "D circ") else { return }
+        doc.docPath = copied.path; doc.docName = copied.name; doc.docBookmark = nil
+        try? modelContext.save()
+    }
+    private func removeDoc(_ doc: CirculationDocument) {
+        if !doc.docPath.isEmpty { try? FileManager.default.removeItem(atPath: doc.docPath) }
+        doc.docPath = ""; doc.docName = ""; doc.docBookmark = nil
+    }
+}
+
+private struct CirculationDocumentRow: View {
+    @Bindable var document: CirculationDocument
+    var onCommit: () -> Void
+    var onDelete: () -> Void
+    var onLink: () -> Void
+    var onOpen: () -> Void
+    var onRemoveDoc: () -> Void
+
+    var body: some View {
+        HStack {
+            DatePicker("", selection: $document.date, displayedComponents: .date)
+                .labelsHidden().frame(width: 90)
+                .onChange(of: document.date) { _, _ in onCommit() }
+            Picker("", selection: $document.type) {
+                Text("—").tag("")
+                Text("Banque").tag("Banque")
+                Text("Tiers").tag("Tiers")
+                Text("Autre").tag("Autre")
+            }
+            .labelsHidden().frame(width: 100)
+            .onChange(of: document.type) { _, _ in onCommit() }
+            TextField("Nom banque / organisme", text: $document.designation)
+                .textFieldStyle(.roundedBorder)
+                .onChange(of: document.designation) { _, _ in onCommit() }
+            RefCell(hasDocument: document.hasDocument, docName: document.docName,
+                    onOpen: onOpen, onLink: onLink, onRemove: onRemoveDoc)
+                .frame(width: 150, alignment: .leading)
+            Button(role: .destructive, action: onDelete) { Image(systemName: "trash") }
+                .buttonStyle(.borderless).frame(width: 28)
+        }
+        .padding(.vertical, 2)
     }
 }
 

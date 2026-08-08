@@ -31,6 +31,7 @@ struct RevisionVEBApp: App {
             Ca3Period.self,
             ImmoInvoice.self,
             Class2Movement.self,
+            CirculationDocument.self,
             ImmoAsset.self,
             SoldesIntermedialres.self,
             PendingItem.self,
