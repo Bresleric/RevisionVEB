@@ -786,19 +786,21 @@ struct CycleBalanceView: View {
                 }
                 Picker("", selection: $tab) {
                     Text("Comptes (\(accounts.count))").tag(0)
-                    if cycle == .tresorerie { Text("Rapprochements").tag(1) }
+                    if cycle == .tresorerie {
+                        Text("Rapprochements").tag(1)
+                        Text("Circularisation").tag(3)
+                    }
                     if cycle == .fiscal { Text("TVA").tag(3) }
                     if cycle == .immobilisations {
                         Text("Factures").tag(5)
                         Text("Mouvements").tag(6)
-                        Text("Circularisation").tag(7)
-                        Text("Amortissements").tag(8)
+                        Text("Amortissements").tag(7)
                     }
                     Text("Contrôles").tag(2)
                     Text(pendingTabLabel).tag(4)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: cycle == .immobilisations ? 790 : ((cycle == .tresorerie || cycle == .fiscal) ? 570 : 470))
+                .frame(width: cycle == .immobilisations ? 790 : ((cycle == .tresorerie || cycle == .fiscal) ? 650 : 470))
                 .padding(.top, 4)
             }
             .padding()
@@ -812,6 +814,8 @@ struct CycleBalanceView: View {
             } else if tab == 1 && cycle == .tresorerie {
                 CycleReconciliationView(exerciceID: exerciceID,
                                         bankAccounts: accounts.filter { $0.accountNumber.hasPrefix("51") })
+            } else if tab == 3 && cycle == .tresorerie {
+                CirculationDocumentsView(exerciceID: exerciceID)
             } else if tab == 3 && cycle == .fiscal {
                 TvaControlView(exerciceID: exerciceID)
             } else if tab == 5 && cycle == .immobilisations {
@@ -819,8 +823,6 @@ struct CycleBalanceView: View {
             } else if tab == 6 && cycle == .immobilisations {
                 Class2MovementsView(exerciceID: exerciceID)
             } else if tab == 7 && cycle == .immobilisations {
-                CirculationDocumentsView(exerciceID: exerciceID)
-            } else if tab == 8 && cycle == .immobilisations {
                 ImmoAssetsView(exerciceID: exerciceID)
             } else if accounts.isEmpty {
                 if exerciceAccounts.isEmpty {
