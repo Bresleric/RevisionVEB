@@ -18,6 +18,8 @@ class SupabaseSync {
 
     let baseURL: String
     let anonKey: String
+    private var isSyncing = false
+    private var hasFullSyncedThisSession = false
 
     init() {
         self.baseURL = SupabaseConfig.url
@@ -897,6 +899,17 @@ class SupabaseSync {
     // MARK: - Full Sync
 
     func fullSync(from container: ModelContainer) async {
+        guard !hasFullSyncedThisSession else {
+            print("⏳ Synchronisation déjà effectuée cette session, appel ignoré")
+            return
+        }
+        guard !isSyncing else {
+            print("⏳ Synchronisation déjà en cours, appel ignoré")
+            return
+        }
+        isSyncing = true
+        defer { isSyncing = false; hasFullSyncedThisSession = true }
+
         print("🚀 Début synchronisation Supabase...")
         print("   URL: \(baseURL)")
         SyncDiagnostics.reset()
@@ -932,13 +945,15 @@ class SupabaseSync {
         // rechargées à neuf. Le travail d'audit n'est jamais vidé : il est
         // fusionné par identifiant plus bas, via loadAuditWork.
 
-        // Vider les tables de DATA (pas les contrôles)
+        // Vider les tables de DATA (pas les contrôles).
+        // IMPORTANT: ne PAS sauvegarder après la suppression — cela créerait un
+        // "trou" où BalanceAccount serait vide, déclenchant une re-refresh de @Query
+        // et un écran blanc. Tout doit être une seule transaction.
         do {
             try context.delete(model: Dossier.self)
             try context.delete(model: Exercice.self)
             try context.delete(model: BalanceAccount.self)
-            try context.save()
-            print("  Tables de données vidées")
+            print("  Tables de données vidées (pas encore sauvegardées)")
         } catch {
             print("  ⚠️  Erreur vidage tables: \(error)")
         }
@@ -1032,7 +1047,7 @@ class SupabaseSync {
             print("     \(error.localizedDescription)")
         }
 
-        // 3. BALANCE ACCOUNTS
+        // 3. BALANCE ACCOUNTS (DEDUPLICATE avant d'insérer)
         do {
             let url = URL(string: "\(baseURL)/rest/v1/balance_accounts")!
             var request = URLRequest(url: url)
@@ -1041,7 +1056,30 @@ class SupabaseSync {
             if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
                let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
                 print("  Balance Accounts: \(jsonArray.count) trouvés")
+
+                // Déduplique EN MÉMOIRE avant insertion
+                var best: [String: [String: Any]] = [:]
                 for item in jsonArray {
+                    guard let accountNumber = item["account_number"] as? String,
+                          let exerciceIdStr = item["exercice_id"] as? String else { continue }
+                    let key = "\(exerciceIdStr)|\(accountNumber)"
+                    guard let current = best[key] else {
+                        best[key] = item
+                        continue
+                    }
+                    let importDate1 = (item["import_date"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+                    let importDate2 = (current["import_date"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+                    let id1 = (item["id"] as? String) ?? ""
+                    let id2 = (current["id"] as? String) ?? ""
+                    if (importDate1, id1) > (importDate2, id2) {
+                        best[key] = item
+                    }
+                }
+
+                print("    🧹 \(jsonArray.count - best.count) doublons filtrés avant insertion")
+
+                // Insérer uniquement les comptes uniques
+                for item in best.values {
                     guard let idStr = item["id"] as? String,
                           let id = UUID(uuidString: idStr),
                           let accountNumber = item["account_number"] as? String,
@@ -1061,7 +1099,7 @@ class SupabaseSync {
                     )
                     context.insert(account)
                 }
-                print("    ✅ \(jsonArray.count) chargés")
+                print("    ✅ \(best.count) uniques insérés")
             }
         } catch {
             print("  ❌ Erreur balance_accounts: \(error)")

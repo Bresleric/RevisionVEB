@@ -229,6 +229,7 @@ extension SupabaseSync {
         }
     }
 
+
     // MARK: - Envoi (local → Supabase)
 
     /// Envoie tout le travail d'audit vers Supabase.
