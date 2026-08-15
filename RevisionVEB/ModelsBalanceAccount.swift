@@ -426,6 +426,14 @@ final class BankReconciliation {
 }
 
 /// Element (ecriture) de rapprochement : libelle + montant signe.
+///
+/// Sert aussi au detail des comptes de regularisation. Une facture non parvenue
+/// n'est pas un simple montant : elle porte une contrepartie de charge, une TVA
+/// recuperable et un TTC. Ces trois champs restent vides pour un element de
+/// rapprochement bancaire, ou seul `montant` a un sens.
+///
+/// `montant` est toujours le montant qui s'additionne pour justifier le solde :
+/// le TTC pour une FNP, le montant signe pour un rapprochement bancaire.
 @Model
 final class ReconItem {
     @Attribute(.unique) var id: UUID
@@ -437,6 +445,13 @@ final class ReconItem {
     var docName: String = ""
     var docPath: String = ""
     var docBookmark: Data? = nil
+
+    // Ventilation comptable (comptes de regularisation).
+    // Valeurs par defaut : l'ajout est une migration purement additive.
+    var compteCharge: String = ""
+    var montantHT: Double = 0
+    var tauxTva: Double = 0        // 20, 10, 5.5, 2.1 ou 0
+    var montantTva: Double = 0
 
     init(id: UUID = UUID(), exerciceID: UUID, accountNumber: String,
          libelle: String = "", montant: Double = 0, ordre: Int = 0,
@@ -453,6 +468,30 @@ final class ReconItem {
     }
 
     var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
+
+    /// Vrai des qu'une ventilation est saisie sur la ligne.
+    var estVentile: Bool { !compteCharge.isEmpty || montantHT != 0 || montantTva != 0 }
+
+    /// Recalcule la TVA depuis le HT et le taux, puis reporte le TTC dans
+    /// `montant` — c'est lui qui justifie le solde du compte.
+    func recalculerDepuisHT() {
+        if tauxTva > 0 {
+            montantTva = (montantHT * tauxTva / 100 * 100).rounded() / 100
+        }
+        montant = montantHT + montantTva
+    }
+
+    /// Recalcule le HT depuis le TTC et le taux, pour saisir dans l'autre sens.
+    func recalculerDepuisTTC() {
+        if tauxTva > 0 {
+            montantHT = (montant / (1 + tauxTva / 100) * 100).rounded() / 100
+            // La TVA prend le reliquat : HT + TVA retombe exactement sur le TTC.
+            montantTva = montant - montantHT
+        } else {
+            montantHT = montant
+            montantTva = 0
+        }
+    }
 }
 
 /// Document de circularisation (confirmations bancaires, tiers, etc.).

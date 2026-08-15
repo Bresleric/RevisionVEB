@@ -304,7 +304,15 @@ final class ImportManager: ObservableObject {
             // Exclure les lignes de sous-total / total (ex: 10ZZZZZZZZ, 5ZZZZZZZZZ)
             if compte.uppercased().contains("ZZZ") { skipped += 1; continue }
 
+            // Identifiant derive de (exercice, compte) et non tire au hasard.
+            //
+            // Avec un UUID neuf a chaque import, Supabase accumulait une
+            // generation de lignes par import — jamais supprimees — et les
+            // comptes revenaient en autant d'exemplaires sur l'autre Mac.
+            // Un identifiant stable fait qu'un reimport ecrase la meme ligne,
+            // ici comme la-bas.
             let account = BalanceAccount(
+                id: SupabaseSync.stableID(exerciceID.uuidString, compte),
                 accountNumber: compte,
                 accountCode: value(row, cols.code),
                 accountLabel: value(row, cols.intitule),
@@ -422,5 +430,240 @@ extension ImportManager {
             print("⚠️ Erreur lors du chargement du cache: \(error)")
             return nil
         }
+    }
+
+    // MARK: - Import Grand Livre 641 (Cycle H)
+
+    /// Importe le grand livre des comptes 641 et le stocke en `SocialPayrollEntry`.
+    ///
+    /// La balance ne porte que des totaux annuels : elle ne peut pas servir au
+    /// rapprochement mensuel avec la DSN. Ce sont donc les ecritures du grand
+    /// livre, datees, qui alimentent le cycle H.
+    func importGL641File(url: URL, exerciceID: UUID) async -> ImportLog {
+        print("📗 ImportManager.importGL641File: \(url.lastPathComponent)")
+
+        isImporting = true
+        importProgress = 0.0
+
+        let log = ImportLog(
+            fileName: url.lastPathComponent,
+            fileType: .payroll,
+            exerciceID: exerciceID
+        )
+
+        func fail(_ message: String) -> ImportLog {
+            log.status = .failed
+            log.errorDetails = message
+            modelContext.insert(log)
+            try? modelContext.save()
+            isImporting = false
+            print("❌ GL 641 : \(message)")
+            return log
+        }
+
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return fail("Fichier introuvable (s'il est dans iCloud/OneDrive, telecharge-le d'abord).")
+        }
+
+        let ext = url.pathExtension.lowercased()
+        if ext == "xlsx" || ext == "xls" {
+            return fail("Format Excel pas encore active. Exporte l'onglet du grand livre en CSV.")
+        }
+
+        guard let content = readTextWithBestEncoding(url: url) else {
+            return fail("Impossible de lire le fichier (encodage non reconnu).")
+        }
+
+        let lignes = Gl641Parser.parse(content: content)
+        guard !lignes.isEmpty else {
+            return fail("Aucune ecriture 641 detectee. Colonnes attendues : Date, Compte, Libelle, Debit, Credit.")
+        }
+
+        // Un reimport remplace le grand livre precedent du meme exercice.
+        if let existing = try? modelContext.fetch(FetchDescriptor<SocialPayrollEntry>()) {
+            for entry in existing where entry.exerciceID == exerciceID {
+                modelContext.delete(entry)
+            }
+        }
+
+        var parEtablissement: [String: Int] = [:]
+        var exclues = 0
+
+        for (i, ligne) in lignes.enumerated() {
+            let entry = SocialPayrollEntry(
+                exerciceID: exerciceID,
+                mois: ligne.mois,
+                annee: ligne.annee,
+                compte: ligne.compte,
+                libelle: ligne.libelle,
+                complement: ligne.complement,
+                montant: ligne.montant,
+                etablissement: ligne.etablissement,
+                siret: Gl641Parser.siret(for: ligne.etablissement),
+                dateEcriture: ligne.date,
+                retenuDansAssiette: ligne.retenu,
+                motifExclusion: ligne.motifExclusion,
+                sourceFile: url.lastPathComponent
+            )
+            modelContext.insert(entry)
+
+            if ligne.retenu {
+                parEtablissement[ligne.etablissement, default: 0] += 1
+            } else {
+                exclues += 1
+            }
+
+            if i % 25 == 0 { importProgress = Double(i) / Double(lignes.count) }
+        }
+
+        // Le badge de l'historique suit l'etablissement le plus represente.
+        if let dominant = parEtablissement.max(by: { $0.value < $1.value })?.key {
+            log.restaurant = dominant == "FREDDY" ? .freddy : .liesel
+        }
+
+        let detail = parEtablissement
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key) \($0.value)" }
+            .joined(separator: ", ")
+
+        log.recordsCount = lignes.count
+        log.successCount = lignes.count
+        log.status = .success
+        log.errorDetails = "Retenu dans l'assiette : \(detail). Exclues : \(exclues)."
+
+        modelContext.insert(log)
+        try? modelContext.save()
+
+        isImporting = false
+        importProgress = 1.0
+        print("📗 GL 641 importe : \(lignes.count) ecritures (\(detail), \(exclues) exclues)")
+        return log
+    }
+
+    // MARK: - Archivage des pieces
+
+    /// Copie le recapitulatif DSN dans le stockage de l'app et l'enregistre comme
+    /// piece du cycle H.
+    ///
+    /// L'identifiant est derive du mois et de l'etablissement : reimporter le
+    /// meme mois remplace la piece au lieu d'en empiler une seconde.
+    private func archiverPieceDsn(url: URL, extraction: DsnExtraction, exerciceID: UUID) {
+        let pieceID = CyclePiece.stableID(
+            exerciceID: exerciceID, cycle: .personnel, categorie: "Récapitulatif DSN",
+            annee: extraction.annee, mois: extraction.mois, etablissement: extraction.etablissement
+        )
+
+        let existantes = (try? modelContext.fetch(FetchDescriptor<CyclePiece>())) ?? []
+        let piece = existantes.first { $0.id == pieceID } ?? {
+            let p = CyclePiece(
+                id: pieceID,
+                exerciceID: exerciceID,
+                cycle: .personnel,
+                categorie: "Récapitulatif DSN",
+                libelle: "DSN \(extraction.mois)/\(extraction.annee) — \(extraction.etablissement)",
+                mois: extraction.mois,
+                annee: extraction.annee,
+                etablissement: extraction.etablissement,
+                ordre: extraction.mois * 10 + (extraction.etablissement == "FREDDY" ? 1 : 0)
+            )
+            modelContext.insert(p)
+            return p
+        }()
+
+        let etiquette = "H DSN \(String(format: "%02d", extraction.mois)) \(extraction.etablissement)"
+        guard let copie = JustificatifStore.copyIn(source: url,
+                                                   exerciceID: exerciceID,
+                                                   accountNumber: etiquette) else {
+            print("⚠️ DSN : copie de la pièce impossible (\(url.lastPathComponent))")
+            return
+        }
+
+        piece.docPath = copie.path
+        piece.docName = copie.name
+        piece.docBookmark = nil
+    }
+
+    // MARK: - Import DSN
+
+    func importDsnFile(url: URL, exerciceID: UUID) async -> ImportLog {
+        isImporting = true
+        importProgress = 0.0
+
+        let filename = url.lastPathComponent.lowercased()
+
+        // Accès security-scoped pour drag-and-drop
+        let accessGranted = url.startAccessingSecurityScopedResource()
+        defer { if accessGranted { url.stopAccessingSecurityScopedResource() } }
+
+        var log = ImportLog(
+            fileName: url.lastPathComponent,
+            fileType: .socialDeclaration,
+            restaurant: .liesel, // Default, sera mis à jour après parsing
+            exerciceID: exerciceID
+        )
+
+        do {
+            var extraction: DsnExtraction?
+
+            if filename.contains(".pdf") {
+                extraction = await DsnParser.parsePayfitPdf(url: url)
+            } else if filename.contains(".csv") || filename.contains(".xlsx") {
+                extraction = await DsnParser.parseArhiaPdf(url: url)
+            }
+
+            if let extraction = extraction {
+                // Déterminer le restaurant basé sur l'établissement
+                log.restaurant = extraction.etablissement == "FREDDY" ? .freddy : .liesel
+
+                // Créer un ID stable basé sur la clé unique (exercice_id, mois, annee, etablissement)
+                // Cela permet à Supabase de faire un UPSERT au lieu d'un INSERT/conflict
+                let stableID = SupabaseSync.stableID(
+                    exerciceID.uuidString,
+                    "\(extraction.mois)",
+                    "\(extraction.annee)",
+                    extraction.etablissement
+                )
+
+                // Cascade documentee : AGIRC-ARRCO T1(+T2) tant qu'elle est
+                // disponible (elle est donnee au centime), sinon la base Urssaf
+                // CTP 027D, arrondie a l'euro par la norme DSN.
+                let choix = CycleHReconciler.selectDsnAssiette(from: extraction.assiettesParPoste)
+
+                let assiette = DsnAssiette(
+                    exerciceID: exerciceID,
+                    mois: extraction.mois,
+                    annee: extraction.annee,
+                    etablissement: extraction.etablissement,
+                    siret: extraction.siret,
+                    assietteBrute: choix.montant,
+                    posteRetenu: choix.poste,
+                    ctp100d: choix.ctp100d,
+                    fichierSource: extraction.fichierSource
+                )
+                assiette.id = stableID
+                modelContext.insert(assiette)
+
+                // Le PDF est la piece qui fonde l'assiette : on l'archive au
+                // dossier dans le meme geste, sinon il faudrait le rattacher a
+                // la main vingt-quatre fois.
+                archiverPieceDsn(url: url, extraction: extraction, exerciceID: exerciceID)
+
+                log.status = .success
+                log.recordsCount = 1
+                log.successCount = 1
+                print("✅ DSN importée : \(extraction.mois)/\(extraction.annee) - \(extraction.etablissement)")
+            } else {
+                log.status = .failed
+                log.errorDetails = "Impossible d'extraire les données DSN du fichier"
+            }
+        }
+
+        modelContext.insert(log)
+        try? modelContext.save()
+
+        isImporting = false
+        importProgress = 1.0
+
+        return log
     }
 }

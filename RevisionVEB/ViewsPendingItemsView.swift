@@ -173,7 +173,7 @@ private struct PendingItemCard: View {
             HStack(spacing: 10) {
                 Menu {
                     ForEach(PendingKind.allCases, id: \.self) { k in
-                        Button { item.type = k; touch() } label: { Label(k.rawValue, systemImage: k.icon) }
+                        Button { item.type = k; touch() } label: { Label(k.label, systemImage: k.icon) }
                     }
                 } label: {
                     Image(systemName: item.type.icon)
@@ -182,7 +182,18 @@ private struct PendingItemCard: View {
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("Nature : \(item.type.rawValue)")
+                .help("Nature : \(item.type.label)")
+
+                // Compte d'origine : sans lui, la liste perd son ancrage
+                // comptable et devient un pense-bete.
+                if !item.accountNumber.isEmpty {
+                    Text(item.accountNumber)
+                        .font(.caption).monospaced()
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(Color.secondary.opacity(0.15))
+                        .cornerRadius(4)
+                        .help("Compte \(item.accountNumber)")
+                }
 
                 TextField("Intitulé du point…", text: $item.titre)
                     .textFieldStyle(.roundedBorder)

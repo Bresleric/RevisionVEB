@@ -161,6 +161,7 @@ class SupabaseSync {
                     "id": p.id.pg,
                     "exercice_id": p.exerciceID.pg,
                     "cycle_raw": p.cycleRaw,
+                    "account_number": p.accountNumber,
                     "titre": p.titre,
                     "detail": p.detail,
                     "type_raw": p.typeRaw,
@@ -232,6 +233,7 @@ class SupabaseSync {
 
                 target.exerciceID = exerciceId
                 target.cycleRaw = cycleRaw
+                target.accountNumber = row["account_number"] as? String ?? ""
                 target.titre = row["titre"] as? String ?? ""
                 target.detail = row["detail"] as? String ?? ""
                 target.typeRaw = row["type_raw"] as? String ?? PendingKind.commentaire.rawValue
@@ -581,19 +583,75 @@ class SupabaseSync {
         }
     }
 
+    /// Lit une table entiere, page par page.
+    ///
+    /// PostgREST plafonne une reponse a 1000 lignes. Sans pagination, une table
+    /// plus grande renvoyait une tranche arbitraire : c'est ainsi qu'un Mac
+    /// pouvait recevoir un jeu de comptes incomplet et incoherent.
+    func fetchAllRows(_ table: String, label: String) async -> [[String: Any]] {
+        var toutes: [[String: Any]] = []
+        let taille = 1000
+        var offset = 0
+
+        while true {
+            do {
+                let url = URL(string: "\(baseURL)/rest/v1/\(table)?limit=\(taille)&offset=\(offset)")!
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let page = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+                else { return toutes }
+
+                toutes += page
+                if page.count < taille { return toutes }
+                offset += taille
+            } catch {
+                print("  ⚠️ \(label): \(error.localizedDescription)")
+                return toutes
+            }
+        }
+    }
+
+    /// Ne garde qu'une ligne par (exercice, compte) : la plus recente.
+    ///
+    /// A egalite de date d'import, l'identifiant le plus grand tranche, pour que
+    /// les deux Macs retiennent la meme.
+    private func dedupeRows(_ rows: [[String: Any]]) -> [[String: Any]] {
+        var best: [String: [String: Any]] = [:]
+        for item in rows {
+            guard let compte = item["account_number"] as? String,
+                  let exercice = item["exercice_id"] as? String else { continue }
+            let key = "\(exercice)|\(compte)"
+            guard let courant = best[key] else { best[key] = item; continue }
+
+            let dateNouvelle = (item["import_date"] as? String)
+                .flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date.distantPast
+            let dateCourante = (courant["import_date"] as? String)
+                .flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date.distantPast
+            let idNouveau = (item["id"] as? String) ?? ""
+            let idCourant = (courant["id"] as? String) ?? ""
+
+            if (dateNouvelle, idNouveau) > (dateCourante, idCourant) { best[key] = item }
+        }
+        return Array(best.values)
+    }
+
     func loadBalanceAccountsFromSupabase(to container: ModelContainer) async {
         do {
             let context = ModelContext(container)
             print("📥 Balance Accounts: chargement...")
 
-            let url = URL(string: "\(baseURL)/rest/v1/balance_accounts")!
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
+            let toutes = await fetchAllRows("balance_accounts", label: "Balance Accounts")
+            guard !toutes.isEmpty else { return }
 
-            let (data, response) = try await session.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                if let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
-                    guard !jsonArray.isEmpty else { return }
+            // Un compte ne doit exister qu'une fois par exercice, quel que soit
+            // le nombre de generations restees sur Supabase.
+            let jsonArray = dedupeRows(toutes)
+            if toutes.count != jsonArray.count {
+                print("  🧹 \(toutes.count - jsonArray.count) doublons distants ignorés")
+            }
 
                     // Charger les IDs locaux
                     var localIds = Set<UUID>()
@@ -604,6 +662,12 @@ class SupabaseSync {
                         print("⚠️ Erreur lecture balance_accounts locaux: \(error)")
                     }
 
+                    // Comptes deja presents localement, par cle logique : sans ce
+                    // filtre, une ligne distante d'une ancienne generation
+                    // reintroduit un doublon sous un autre identifiant.
+                    let clesLocales = Set(((try? context.fetch(FetchDescriptor<BalanceAccount>())) ?? [])
+                        .map { "\($0.exerciceID.uuidString)|\($0.accountNumber)" })
+
                     var loaded = 0
                     for item in jsonArray {
                         guard let idStr = item["id"] as? String,
@@ -612,9 +676,8 @@ class SupabaseSync {
                               let exerciceIdStr = item["exercice_id"] as? String,
                               let exerciceId = UUID(uuidString: exerciceIdStr) else { continue }
 
-                        if localIds.contains(id) {
-                            continue
-                        }
+                        if localIds.contains(id) { continue }
+                        if clesLocales.contains("\(exerciceIdStr)|\(accountNumber)") { continue }
 
                         let debit = (item["debit"] as? NSNumber)?.doubleValue ?? 0.0
                         let credit = (item["credit"] as? NSNumber)?.doubleValue ?? 0.0
@@ -645,8 +708,6 @@ class SupabaseSync {
                         try context.save()
                     }
                     print("✅ \(loaded) balance accounts chargés (+ \(localIds.count) déjà locaux)")
-                }
-            }
         } catch {
             print("⚠️ Erreur chargement balance_accounts: \(error.localizedDescription)")
         }
@@ -1049,31 +1110,18 @@ class SupabaseSync {
 
         // 3. BALANCE ACCOUNTS (DEDUPLICATE avant d'insérer)
         do {
-            let url = URL(string: "\(baseURL)/rest/v1/balance_accounts")!
-            var request = URLRequest(url: url)
-            request.httpMethod = "GET"
-            let (data, response) = try await session.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
-               let jsonArray = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            // Lecture paginee : la table a pu accumuler plusieurs generations de
+            // lignes, bien au-dela des 1000 que PostgREST renvoie par defaut.
+            let jsonArray = await fetchAllRows("balance_accounts", label: "Balance Accounts")
+            if !jsonArray.isEmpty {
                 print("  Balance Accounts: \(jsonArray.count) trouvés")
 
-                // Déduplique EN MÉMOIRE avant insertion
+                let uniques = dedupeRows(jsonArray)
                 var best: [String: [String: Any]] = [:]
-                for item in jsonArray {
-                    guard let accountNumber = item["account_number"] as? String,
-                          let exerciceIdStr = item["exercice_id"] as? String else { continue }
-                    let key = "\(exerciceIdStr)|\(accountNumber)"
-                    guard let current = best[key] else {
-                        best[key] = item
-                        continue
-                    }
-                    let importDate1 = (item["import_date"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
-                    let importDate2 = (current["import_date"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
-                    let id1 = (item["id"] as? String) ?? ""
-                    let id2 = (current["id"] as? String) ?? ""
-                    if (importDate1, id1) > (importDate2, id2) {
-                        best[key] = item
-                    }
+                for item in uniques {
+                    guard let compte = item["account_number"] as? String,
+                          let exercice = item["exercice_id"] as? String else { continue }
+                    best["\(exercice)|\(compte)"] = item
                 }
 
                 print("    🧹 \(jsonArray.count - best.count) doublons filtrés avant insertion")

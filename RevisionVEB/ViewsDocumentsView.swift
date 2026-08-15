@@ -21,6 +21,7 @@ enum DocumentOrigine: String, CaseIterable {
     case rapprochement = "Élément de rapprochement"
     case factureImmo   = "Facture d'investissement"
     case declarationTva = "Déclaration de TVA"
+    case pieceCycle    = "Pièce de cycle"
 
     var icon: String {
         switch self {
@@ -28,6 +29,7 @@ enum DocumentOrigine: String, CaseIterable {
         case .rapprochement:  return "building.columns"
         case .factureImmo:    return "wrench.and.screwdriver"
         case .declarationTva: return "percent"
+        case .pieceCycle:     return "folder.badge.person.crop"
         }
     }
 
@@ -37,6 +39,7 @@ enum DocumentOrigine: String, CaseIterable {
         case .rapprochement:  return .teal
         case .factureImmo:    return .purple
         case .declarationTva: return .orange
+        case .pieceCycle:     return .indigo
         }
     }
 }
@@ -63,6 +66,7 @@ struct DocumentsView: View {
     @Query private var reconItems: [ReconItem]
     @Query private var immoInvoices: [ImmoInvoice]
     @Query private var ca3Periods: [Ca3Period]
+    @Query private var cyclePieces: [CyclePiece]
     @Query private var rules: [AccountCycleRule]
     @Query(sort: \BalanceAccount.accountNumber) private var accounts: [BalanceAccount]
 
@@ -124,6 +128,15 @@ struct DocumentsView: View {
                                     nom: p.docName.isEmpty ? URL(fileURLWithPath: p.docPath).lastPathComponent : p.docName,
                                     chemin: p.docPath,
                                     origine: .declarationTva))
+        }
+
+        for p in cyclePieces where p.exerciceID == exerciceID && !p.docPath.isEmpty {
+            rows.append(DocumentRow(cycle: p.cycle,
+                                    rattachement: p.categorie,
+                                    libelle: p.libelle,
+                                    nom: p.docName.isEmpty ? URL(fileURLWithPath: p.docPath).lastPathComponent : p.docName,
+                                    chemin: p.docPath,
+                                    origine: .pieceCycle))
         }
 
         return rows.sorted {

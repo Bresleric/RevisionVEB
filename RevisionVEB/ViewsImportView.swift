@@ -36,6 +36,8 @@ struct ImportView: View {
             Dossier.self, Exercice.self, ControlState.self, AccountJustification.self,
             BankReconciliation.self, ReconItem.self, TvaCompteTaux.self, Ca3Entry.self, Ca3Period.self,
             ImmoInvoice.self, Class2Movement.self, CirculationDocument.self,
+            SocialPayrollEntry.self, DsnAssiette.self, SocialReconciliation.self,
+            SocialAnomaly.self, CyclePiece.self,
             configurations: config
         )
         _importManager = StateObject(wrappedValue: ImportManager(modelContext: ModelContext(container)))
@@ -110,7 +112,7 @@ struct ImportView: View {
                         UTType(filenameExtension: "xls")!,
                         UTType(filenameExtension: "txt")!
                     ],
-                    allowsMultipleSelection: false
+                    allowsMultipleSelection: true
                 ) { result in
                     handleFileSelection(result)
                 }
@@ -202,45 +204,60 @@ struct ImportView: View {
     // MARK: - Helpers
     
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
-        guard let provider = providers.first else { return false }
-        
-        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
-            guard let data = item as? Data,
-                  let url = URL(dataRepresentation: data, relativeTo: nil) else {
-                return
-            }
-            
-            Task { @MainActor in
-                await processFile(url)
+        guard !providers.isEmpty else { return false }
+
+        print("📥 Drop détecté: \(providers.count) fichier(s)")
+
+        for provider in providers {
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+                guard let data = item as? Data,
+                      let url = URL(dataRepresentation: data, relativeTo: nil) else {
+                    return
+                }
+
+                Task { @MainActor in
+                    print("📁 Traitement: \(url.lastPathComponent)")
+                    guard url.startAccessingSecurityScopedResource() else {
+                        print("❌ Impossible d'obtenir l'accès au fichier: \(url.lastPathComponent)")
+                        return
+                    }
+
+                    await processFile(url)
+                    url.stopAccessingSecurityScopedResource()
+                }
             }
         }
-        
+
         return true
     }
     
     private func handleFileSelection(_ result: Result<[URL], Error>) {
         switch result {
         case .success(let urls):
-            guard let url = urls.first else {
+            guard !urls.isEmpty else {
                 print("❌ Aucun fichier sélectionné")
                 return
             }
-            
-            print("✅ Fichier sélectionné: \(url.lastPathComponent)")
-            print("📁 Chemin: \(url.path)")
-            
-            // IMPORTANT: Démarrer l'accès sécurisé AVANT de passer à processFile
-            guard url.startAccessingSecurityScopedResource() else {
-                print("❌ Impossible d'obtenir l'accès au fichier (sandboxing)")
-                return
-            }
-            
+
+            print("✅ \(urls.count) fichier(s) sélectionné(s)")
+
             Task {
-                await processFile(url)
-                // Libérer l'accès après traitement
-                url.stopAccessingSecurityScopedResource()
+                for url in urls {
+                    print("📁 Traitement: \(url.lastPathComponent)")
+
+                    // IMPORTANT: Démarrer l'accès sécurisé AVANT de passer à processFile
+                    guard url.startAccessingSecurityScopedResource() else {
+                        print("❌ Impossible d'obtenir l'accès au fichier: \(url.lastPathComponent)")
+                        continue
+                    }
+
+                    await processFile(url)
+
+                    // Libérer l'accès après traitement
+                    url.stopAccessingSecurityScopedResource()
+                }
             }
-            
+
         case .failure(let error):
             print("❌ Erreur sélection fichier: \(error.localizedDescription)")
         }
@@ -249,10 +266,18 @@ struct ImportView: View {
     private func processFile(_ url: URL) async {
         print("🔄 Traitement fichier: \(url.lastPathComponent)")
         let ext = url.pathExtension.lowercased()
+        let filename = url.lastPathComponent.lowercased()
         print("📄 Extension détectée: \(ext)")
-        
-        if ext == "pdf" {
-            print("📋 Import PDF...")
+
+        // Détecte les fichiers DSN
+        if filename.contains("dsn") {
+            print("📋 Import DSN détecté...")
+            _ = await importManager.importDsnFile(url: url, exerciceID: exerciceID)
+        } else if filename.contains("641") || filename.contains("grand livre") || filename.contains("grand-livre") {
+            print("📗 Import Grand Livre 641 détecté...")
+            _ = await importManager.importGL641File(url: url, exerciceID: exerciceID)
+        } else if ext == "pdf" {
+            print("📋 Import PDF facture...")
             _ = await importManager.importInvoicePDF(url: url, restaurant: .freddy)
         } else if ext == "csv" || ext == "tsv" || ext == "txt" {
             print("📊 Import balance CSV/TSV/TXT...")
@@ -266,7 +291,7 @@ struct ImportView: View {
             print("📊 Import par défaut (balance CSV/TSV)...")
             _ = await importManager.importBalance(url: url, exerciceID: exerciceID)
         }
-        
+
         print("✅ Traitement terminé")
     }
     

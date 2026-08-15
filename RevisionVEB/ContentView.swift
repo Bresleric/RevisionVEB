@@ -405,11 +405,11 @@ enum DossierExport {
                 if a.priorite.rank != b.priorite.rank { return a.priorite.rank < b.priorite.rank }
                 return a.creeLe < b.creeLe
             }
-            var sus = "Cycle;Type;Intitulé;Détail;Statut;Priorité;Responsable;Échéance;Créé le;Modifié le\n"
+            var sus = "Cycle;Compte;Type;Intitulé;Détail;Statut;Priorité;Responsable;Échéance;Créé le;Modifié le\n"
             for p in sorted {
                 let cyc = p.cycle.map { "\($0.letter) - \($0.shortName)" } ?? p.cycleRaw
                 let ech = p.echeance.map { df.string(from: $0) } ?? ""
-                sus += "\(cell(cyc));\(p.type.rawValue);\(cell(p.titre));\(cell(p.detail));"
+                sus += "\(cell(cyc));\(p.accountNumber);\(p.type.label);\(cell(p.titre));\(cell(p.detail));"
                 sus += "\(p.statut.rawValue);\(p.priorite.rawValue);\(cell(p.responsable));"
                 sus += "\(ech);\(df.string(from: p.creeLe));\(df.string(from: p.updatedAt))\n"
             }
@@ -520,9 +520,41 @@ enum DossierExport {
             let cyc = (rDict[j.accountNumber] ?? RevisionCycle.forAccount(j.accountNumber)).letter
             await joindre(j.docPath, prefixe: cyc)
         }
-        // Pieces des elements de rapprochement
+        // Pieces des lignes de detail d'un compte : rapprochement bancaire en B,
+        // mais aussi factures non parvenues en D, charges constatees d'avance...
+        // Le prefixe suit donc le cycle du compte, pas le seul cycle B.
         for it in reconItems where !it.docPath.isEmpty {
-            await joindre(it.docPath, prefixe: "B (rappro)")
+            let cyc = (rDict[it.accountNumber] ?? RevisionCycle.forAccount(it.accountNumber)).letter
+            await joindre(it.docPath, prefixe: "\(cyc) - détail \(it.accountNumber)")
+        }
+
+        // Detail ventile des comptes de regularisation : c'est l'etat que
+        // reclame l'expert-comptable sur un 408, pas le solde seul.
+        let ventiles = reconItems.filter { $0.estVentile }
+        if !ventiles.isEmpty {
+            func eur2(_ d: Double) -> String {
+                String(format: "%.2f", d).replacingOccurrences(of: ".", with: ",")
+            }
+            var det = "Compte;Intitulé du compte;Libellé;Compte de charge;HT;Taux TVA;TVA;TTC;Pièce\n"
+            let parCompte = Dictionary(grouping: ventiles) { $0.accountNumber }
+            for numero in parCompte.keys.sorted() {
+                let lignes = (parCompte[numero] ?? []).sorted { $0.ordre < $1.ordre }
+                let intitule = accounts.first { $0.accountNumber == numero }
+                    .map { $0.accountLabel.isEmpty ? $0.accountCode : $0.accountLabel } ?? ""
+                for l in lignes {
+                    let lib = l.libelle.replacingOccurrences(of: ";", with: ",")
+                    let taux = l.tauxTva == 0 ? "" : String(format: "%g", l.tauxTva)
+                    det += "\(numero);\(intitule.replacingOccurrences(of: ";", with: ","));\(lib);"
+                    det += "\(l.compteCharge);\(eur2(l.montantHT));\(taux);\(eur2(l.montantTva));"
+                    det += "\(eur2(l.montant));\(l.docName)\n"
+                }
+                let tHT = lignes.reduce(0) { $0 + $1.montantHT }
+                let tTva = lignes.reduce(0) { $0 + $1.montantTva }
+                let tTtc = lignes.reduce(0) { $0 + $1.montant }
+                det += "\(numero);TOTAL;;;\(eur2(tHT));;\(eur2(tTva));\(eur2(tTtc));\n"
+            }
+            try? det.data(using: .utf8)?
+                .write(to: root.appendingPathComponent("Détail comptes de régularisation.csv"))
         }
         // Factures d'investissement (cycle G)
         let immoInv = ((try? context.fetch(FetchDescriptor<ImmoInvoice>())) ?? [])
@@ -540,6 +572,47 @@ enum DossierExport {
             }
             try? txt.data(using: .utf8)?.write(to: root.appendingPathComponent("Immobilisations.csv"))
         }
+        // Pieces rattachees a un cycle (feuilles de travail, recapitulatifs DSN).
+        //
+        // Les declarations sociales partent dans leur propre dossier, comme les
+        // CA3 : l'expert-comptable les cherche en tant que telles, pas melees
+        // aux pieces des comptes.
+        let cyclePieces = ((try? context.fetch(FetchDescriptor<CyclePiece>())) ?? [])
+            .filter { $0.exerciceID == exercice.id && !$0.docPath.isEmpty }
+
+        let piecesDsn = cyclePieces.filter { $0.categorie == "Récapitulatif DSN" }
+        if !piecesDsn.isEmpty {
+            let dossierDsn = root.appendingPathComponent("Déclarations sociales (DSN)", isDirectory: true)
+            try? fm.createDirectory(at: dossierDsn, withIntermediateDirectories: true)
+            for piece in piecesDsn.sorted(by: { ($0.annee, $0.mois, $0.etablissement) < ($1.annee, $1.mois, $1.etablissement) }) {
+                let nom = URL(fileURLWithPath: piece.docPath).lastPathComponent
+                guard let src = await resolveJustificatif(path: piece.docPath) else {
+                    manquants.append("DSN \(piece.mois)/\(piece.annee) \(piece.etablissement) - \(nom)")
+                    continue
+                }
+                let ext = URL(fileURLWithPath: nom).pathExtension
+                let cible = String(format: "DSN %04d-%02d %@.%@", piece.annee, piece.mois,
+                                   piece.etablissement, ext.isEmpty ? "pdf" : ext)
+                let dest = dossierDsn.appendingPathComponent(cible)
+                try? fm.removeItem(at: dest)
+                do { try fm.copyItem(at: src, to: dest) }
+                catch { manquants.append("DSN \(piece.mois)/\(piece.annee) \(piece.etablissement) - \(nom)") }
+            }
+
+            var txt = "Déclarations sociales nominatives\n\(dossier.nom) — Exercice \(exercice.libelle)\n\n"
+            txt += "Année;Mois;Établissement;Document\n"
+            for p in piecesDsn.sorted(by: { ($0.annee, $0.mois, $0.etablissement) < ($1.annee, $1.mois, $1.etablissement) }) {
+                txt += "\(p.annee);\(p.mois);\(p.etablissement);\(p.docName)\n"
+            }
+            try? txt.data(using: .utf8)?.write(to: root.appendingPathComponent("Déclarations sociales.csv"))
+        }
+
+        // Feuilles de travail et autres pieces de cycle, avec les justificatifs.
+        for piece in cyclePieces where piece.categorie != "Récapitulatif DSN" {
+            let etiquette = piece.categorie.isEmpty ? "pièce" : piece.categorie
+            await joindre(piece.docPath, prefixe: "\(piece.cycle.letter) - \(etiquette)")
+        }
+
         // Documents de circularisation (cycle G)
         let circulationDocs = ((try? context.fetch(FetchDescriptor<CirculationDocument>())) ?? [])
             .filter { $0.exerciceID == exercice.id }
@@ -669,6 +742,21 @@ struct CycleBalanceView: View {
 
     @State private var pendingAccount: String?
     @State private var showDocImporter = false
+    @State private var saisie: SaisiePending?
+    @State private var compteDetaille: BalanceAccount?
+
+    private func nombreLignes(_ accountNumber: String) -> Int {
+        reconItems.filter { $0.exerciceID == exerciceID && $0.accountNumber == accountNumber }.count
+    }
+
+    /// Points ouverts rattaches a un compte : (points en suspens, notes).
+    private func compteursPending(_ accountNumber: String) -> (suspens: Int, notes: Int) {
+        let pour = pendingItems.filter {
+            $0.exerciceID == exerciceID && $0.accountNumber == accountNumber && !$0.statut.isClosed
+        }
+        return (pour.filter { $0.type == .tache }.count,
+                pour.filter { $0.type == .commentaire }.count)
+    }
 
     private var rulesDict: [String: RevisionCycle] {
         Dictionary(rules.filter { $0.dossierID == dossierID }.map { ($0.accountNumber, $0.cycle) },
@@ -721,7 +809,7 @@ struct CycleBalanceView: View {
 
     /// Libellé de l'onglet Points en suspens, avec le nombre de points ouverts.
     private var pendingTabLabel: String {
-        openPendingCount > 0 ? "Points en suspens (\(openPendingCount))" : "Points en suspens"
+        openPendingCount > 0 ? "Suspens / Notes (\(openPendingCount))" : "Suspens / Notes"
     }
 
     private var totalDebit: Double { accounts.reduce(0) { $0 + $1.debit } }
@@ -796,11 +884,14 @@ struct CycleBalanceView: View {
                         Text("Mouvements").tag(6)
                         Text("Amortissements").tag(7)
                     }
+                    if cycle == .personnel {
+                        Text("Rapprochement social").tag(8)
+                    }
                     Text("Contrôles").tag(2)
                     Text(pendingTabLabel).tag(4)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: cycle == .immobilisations ? 790 : ((cycle == .tresorerie || cycle == .fiscal) ? 650 : 470))
+                .frame(width: cycle == .immobilisations ? 790 : (cycle == .personnel ? 900 : ((cycle == .tresorerie || cycle == .fiscal) ? 650 : 470)))
                 .padding(.top, 4)
             }
             .padding()
@@ -824,6 +915,8 @@ struct CycleBalanceView: View {
                 Class2MovementsView(exerciceID: exerciceID)
             } else if tab == 7 && cycle == .immobilisations {
                 ImmoAssetsView(exerciceID: exerciceID)
+            } else if tab == 8 && cycle == .personnel {
+                CycleSocialView(exerciceID: exerciceID)
             } else if accounts.isEmpty {
                 if exerciceAccounts.isEmpty {
                     PlaceholderView(title: "Aucune balance importée",
@@ -833,27 +926,31 @@ struct CycleBalanceView: View {
                                     message: "La balance importée ne contient pas de compte rattaché au cycle \(cycle.letter).")
                 }
             } else {
+                // `Table` ne prend que dix colonnes : les cinq premieres sont
+                // regroupees pour laisser la place a « Suspens / Note ».
                 Table(accounts) {
-                    TableColumn("Compte") { acc in
-                        Text(acc.accountNumber).monospaced()
+                    Group {
+                        TableColumn("Compte") { (acc: BalanceAccount) in
+                            Text(acc.accountNumber).monospaced()
+                        }
+                        .width(90)
+                        TableColumn("Intitulé") { (acc: BalanceAccount) in
+                            Text(acc.accountLabel.isEmpty ? acc.accountCode : acc.accountLabel)
+                        }
+                        TableColumn("Débit") { (acc: BalanceAccount) in
+                            Text(formatEuro(acc.debit)).monospacedDigit().foregroundStyle(.secondary)
+                        }
+                        .width(105)
+                        TableColumn("Crédit") { (acc: BalanceAccount) in
+                            Text(formatEuro(acc.credit)).monospacedDigit().foregroundStyle(.secondary)
+                        }
+                        .width(105)
+                        TableColumn("Solde N") { (acc: BalanceAccount) in
+                            Text(formatEuro(acc.balanceN)).monospacedDigit()
+                                .foregroundStyle(acc.balanceN < 0 ? .red : .primary)
+                        }
+                        .width(105)
                     }
-                    .width(90)
-                    TableColumn("Intitulé") { acc in
-                        Text(acc.accountLabel.isEmpty ? acc.accountCode : acc.accountLabel)
-                    }
-                    TableColumn("Débit") { acc in
-                        Text(formatEuro(acc.debit)).monospacedDigit().foregroundStyle(.secondary)
-                    }
-                    .width(105)
-                    TableColumn("Crédit") { acc in
-                        Text(formatEuro(acc.credit)).monospacedDigit().foregroundStyle(.secondary)
-                    }
-                    .width(105)
-                    TableColumn("Solde N") { acc in
-                        Text(formatEuro(acc.balanceN)).monospacedDigit()
-                            .foregroundStyle(acc.balanceN < 0 ? .red : .primary)
-                    }
-                    .width(105)
                     TableColumn("Solde N-1") { acc in
                         Text(formatEuro(acc.balanceNMinus1)).monospacedDigit().foregroundStyle(.secondary)
                     }
@@ -894,6 +991,33 @@ struct CycleBalanceView: View {
                                 onRemove: { removeDoc(acc.accountNumber) })
                     }
                     .width(150)
+                    TableColumn("Détail") { acc in
+                        DetailCell(lignes: nombreLignes(acc.accountNumber),
+                                   total: reconItemsTotal(acc.accountNumber),
+                                   onOpen: { compteDetaille = acc })
+                    }
+                    .width(120)
+                    TableColumn("Suspens / Note") { acc in
+                        PendingButtonsCell(
+                            compteurs: compteursPending(acc.accountNumber),
+                            onSuspens: { saisie = SaisiePending(compte: acc.accountNumber,
+                                                                intitule: acc.accountLabel.isEmpty ? acc.accountCode : acc.accountLabel,
+                                                                type: .tache) },
+                            onNote: { saisie = SaisiePending(compte: acc.accountNumber,
+                                                             intitule: acc.accountLabel.isEmpty ? acc.accountCode : acc.accountLabel,
+                                                             type: .commentaire) }
+                        )
+                    }
+                    .width(130)
+                }
+                .sheet(item: $saisie) { contexte in
+                    PendingItemEditor(contexte: contexte, cycle: cycle, exerciceID: exerciceID) { nouveau in
+                        modelContext.insert(nouveau)
+                        try? modelContext.save()
+                    }
+                }
+                .sheet(item: $compteDetaille) { compte in
+                    AccountDetailSheet(compte: compte, cycle: cycle, exerciceID: exerciceID)
                 }
                 .fileImporter(isPresented: $showDocImporter,
                               allowedContentTypes: [.item],
@@ -3549,6 +3673,587 @@ private struct AccountRowView: View {
             .tint(isOverridden ? .orange : .secondary)
         }
         .padding(.vertical, 2)
+    }
+}
+
+// MARK: - Detail justificatif d'un compte
+
+/// Cellule « Détail » de la table des comptes.
+private struct DetailCell: View {
+    let lignes: Int
+    let total: Double
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            if lignes == 0 {
+                Label("Détailler", systemImage: "list.bullet.rectangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("\(lignes) ligne\(lignes > 1 ? "s" : "")")
+                        .font(.caption)
+                    Text(formatEuro(total)).font(.caption2).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+                .foregroundStyle(.blue)
+            }
+        }
+        .buttonStyle(.borderless)
+        .help("Détailler le contenu du compte, pièce par pièce")
+    }
+}
+
+/// Detail d'un compte, ligne a ligne, avec une piece par ligne.
+///
+/// C'est la reponse au besoin des comptes de regularisation : le solde du 408
+/// n'est pas justifie par un document, mais par la liste des factures non
+/// parvenues qui le composent. La somme des lignes devient le solde justifie du
+/// compte, et l'ecart avec la balance se lit immediatement.
+struct AccountDetailSheet: View {
+    let compte: BalanceAccount
+    let cycle: RevisionCycle
+    let exerciceID: UUID
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.modelContext) private var modelContext
+    @Query private var allItems: [ReconItem]
+    @Query private var justifications: [AccountJustification]
+
+    @Query(sort: \BalanceAccount.accountNumber) private var tousComptes: [BalanceAccount]
+
+    @State private var showImporter = false
+    @State private var itemALier: ReconItem?
+    /// Vrai quand l'import cree une ligne par fichier choisi.
+    @State private var importEnLot = false
+    @State private var ventileForce: Bool?
+
+    private var items: [ReconItem] {
+        allItems
+            .filter { $0.exerciceID == exerciceID && $0.accountNumber == compte.accountNumber }
+            .sorted { $0.ordre < $1.ordre }
+    }
+
+    private var total: Double { items.reduce(0) { $0 + $1.montant } }
+    private var totalHT: Double { items.reduce(0) { $0 + $1.montantHT } }
+    private var totalTva: Double { items.reduce(0) { $0 + $1.montantTva } }
+    private var ecart: Double { compte.balanceN - total }
+    private var sansPiece: Int { items.filter { !$0.hasDocument }.count }
+
+    /// Comptes de charge proposes a la saisie : classes 6 de la balance.
+    private var comptesCharge: [BalanceAccount] {
+        tousComptes.filter { $0.exerciceID == exerciceID && $0.accountNumber.hasPrefix("6") }
+    }
+
+    /// Ventilation charge / TVA / TTC.
+    ///
+    /// Activee d'office sur les comptes de regularisation et de cut-off — FNP,
+    /// FAE, charges et produits constates d'avance — ou des qu'une ligne est
+    /// deja ventilee. Le bouton permet de la forcer ailleurs.
+    private var ventile: Bool {
+        if let force = ventileForce { return force }
+        let p3 = String(compte.accountNumber.prefix(3))
+        if ["408", "418", "486", "487"].contains(p3) { return true }
+        return items.contains { $0.estVentile }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            entete
+            Divider()
+
+            if items.isEmpty {
+                VStack(spacing: 12) {
+                    Image(systemName: "list.bullet.rectangle")
+                        .font(.system(size: 44)).foregroundStyle(.secondary)
+                    Text("Aucune ligne de détail").font(.headline)
+                    Text("Ajoute une ligne par pièce composant le solde, ou importe directement les factures : "
+                         + "une ligne sera créée pour chacune.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 420)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(30)
+            } else if ventile {
+                ScrollView([.horizontal, .vertical]) {
+                    VStack(spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text("Libellé / fournisseur").frame(width: 220, alignment: .leading)
+                            Text("Compte de charge").frame(width: 120, alignment: .leading)
+                            Text("HT").frame(width: 100, alignment: .trailing)
+                            Text("Taux").frame(width: 70, alignment: .leading)
+                            Text("TVA").frame(width: 100, alignment: .trailing)
+                            Text("TTC").frame(width: 100, alignment: .trailing)
+                            Text("Pièce").frame(width: 150, alignment: .leading)
+                            Text("").frame(width: 28)
+                        }
+                        .font(.caption).foregroundStyle(.secondary)
+
+                        ForEach(items) { item in
+                            ReconItemVentileRow(
+                                item: item,
+                                comptesCharge: comptesCharge,
+                                onCommit: { sauver() },
+                                onDelete: { retirerPiece(item); modelContext.delete(item); sauver() },
+                                onLink: { itemALier = item; importEnLot = false; showImporter = true },
+                                onOpen: { openJustificationDocument(path: item.docPath, bookmark: item.docBookmark) },
+                                onRemoveDoc: { retirerPiece(item); sauver() }
+                            )
+                        }
+
+                        Divider().padding(.vertical, 2)
+
+                        HStack(spacing: 8) {
+                            Text("TOTAL").frame(width: 220, alignment: .leading)
+                            Text("").frame(width: 120)
+                            Text(formatEuro(totalHT)).monospacedDigit()
+                                .frame(width: 100, alignment: .trailing)
+                            Text("").frame(width: 70)
+                            Text(formatEuro(totalTva)).monospacedDigit()
+                                .frame(width: 100, alignment: .trailing)
+                            Text(formatEuro(total)).monospacedDigit()
+                                .frame(width: 100, alignment: .trailing)
+                            Text("").frame(width: 178)
+                        }
+                        .font(.callout.weight(.semibold))
+                    }
+                    .padding()
+                }
+            } else {
+                ScrollView {
+                    VStack(spacing: 6) {
+                        HStack(spacing: 8) {
+                            Text("Libellé").frame(maxWidth: .infinity, alignment: .leading)
+                            Text("Montant").frame(width: 110, alignment: .trailing)
+                            Text("Pièce").frame(width: 150, alignment: .leading)
+                            Text("").frame(width: 28)
+                        }
+                        .font(.caption).foregroundStyle(.secondary)
+
+                        ForEach(items) { item in
+                            ReconItemRow(
+                                item: item,
+                                onCommit: { sauver() },
+                                onDelete: { retirerPiece(item); modelContext.delete(item); sauver() },
+                                onLink: { itemALier = item; importEnLot = false; showImporter = true },
+                                onOpen: { openJustificationDocument(path: item.docPath, bookmark: item.docBookmark) },
+                                onRemoveDoc: { retirerPiece(item); sauver() }
+                            )
+                        }
+                    }
+                    .padding()
+                }
+            }
+
+            Divider()
+            piedDePage
+        }
+        .frame(width: 780, height: 560)
+        .fileImporter(isPresented: $showImporter,
+                      allowedContentTypes: [.item],
+                      allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            if importEnLot {
+                importerEnLot(urls)
+            } else if let url = urls.first, let item = itemALier {
+                attacher(item, url)
+            }
+            itemALier = nil
+        }
+    }
+
+    private var entete: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Compte \(compte.accountNumber)").font(.headline)
+                    Text(compte.accountLabel.isEmpty ? compte.accountCode : compte.accountLabel)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("Cycle \(cycle.letter) — \(cycle.shortName)")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+
+            HStack(spacing: 20) {
+                chiffre("Solde balance", formatEuro(compte.balanceN))
+                chiffre("Total détaillé", formatEuro(total))
+                chiffre("Écart", formatEuroSigned(ecart),
+                        color: abs(ecart) < 0.5 ? .green : .red)
+                if sansPiece > 0 {
+                    chiffre("Sans pièce", "\(sansPiece)", color: .orange)
+                }
+                Spacer()
+            }
+        }
+        .padding()
+    }
+
+    private func chiffre(_ titre: String, _ valeur: String, color: Color = .primary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(titre).font(.caption).foregroundStyle(.secondary)
+            Text(valeur).font(.headline).monospacedDigit().foregroundStyle(color)
+        }
+    }
+
+    private var piedDePage: some View {
+        HStack(spacing: 10) {
+            Button {
+                let item = ReconItem(exerciceID: exerciceID,
+                                     accountNumber: compte.accountNumber,
+                                     ordre: items.count)
+                modelContext.insert(item)
+                sauver()
+            } label: {
+                Label("Ajouter une ligne", systemImage: "plus.circle")
+            }
+
+            Button {
+                importEnLot = true
+                showImporter = true
+            } label: {
+                Label("Importer des factures…", systemImage: "doc.badge.plus")
+            }
+            .help("Une ligne est créée par facture choisie, il ne reste que le montant à saisir")
+
+            Toggle("Ventilation charge / TVA", isOn: Binding(
+                get: { ventile },
+                set: { ventileForce = $0 }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help("Saisir le compte de charge, le HT, le taux et la TVA pour chaque ligne")
+
+            Spacer()
+
+            Text(ventile
+                 ? "Le total TTC devient le solde justifié du compte."
+                 : "Le total détaillé devient le solde justifié du compte.")
+                .font(.caption).foregroundStyle(.secondary)
+
+            Button("Fermer") { dismiss() }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding()
+    }
+
+    // MARK: - Actions
+
+    /// Cree une ligne par fichier choisi : le libelle reprend le nom du fichier,
+    /// il ne reste que le montant a saisir.
+    private func importerEnLot(_ urls: [URL]) {
+        var ordre = items.count
+        for url in urls {
+            let item = ReconItem(exerciceID: exerciceID,
+                                 accountNumber: compte.accountNumber,
+                                 libelle: url.deletingPathExtension().lastPathComponent,
+                                 ordre: ordre)
+            modelContext.insert(item)
+            attacher(item, url, sauvegarder: false)
+            ordre += 1
+        }
+        sauver()
+    }
+
+    private func attacher(_ item: ReconItem, _ url: URL, sauvegarder: Bool = true) {
+        guard let copie = JustificatifStore.copyIn(source: url,
+                                                   exerciceID: exerciceID,
+                                                   accountNumber: compte.accountNumber) else { return }
+        item.docPath = copie.path
+        item.docName = copie.name
+        item.docBookmark = nil
+        uploadJustificatif(path: copie.path)
+        if sauvegarder { sauver() }
+    }
+
+    private func retirerPiece(_ item: ReconItem) {
+        if !item.docPath.isEmpty { try? FileManager.default.removeItem(atPath: item.docPath) }
+        item.docPath = ""; item.docName = ""; item.docBookmark = nil
+    }
+
+    /// Enregistre et reporte le total sur la justification du compte.
+    ///
+    /// Detailler un compte, c'est le justifier : le total des lignes fait foi et
+    /// remplace une eventuelle saisie manuelle du solde justifie.
+    private func sauver() {
+        let justification = justifications.first {
+            $0.exerciceID == exerciceID && $0.accountNumber == compte.accountNumber
+        } ?? {
+            let j = AccountJustification(exerciceID: exerciceID, accountNumber: compte.accountNumber)
+            modelContext.insert(j)
+            return j
+        }()
+
+        let lignes = items
+        justification.soldeJustifie = lignes.isEmpty ? nil : lignes.reduce(0) { $0 + $1.montant }
+        justification.updatedAt = Date()
+
+        try? modelContext.save()
+    }
+}
+
+/// Ligne de detail ventilee : charge, TVA, TTC.
+///
+/// Le TTC n'est jamais saisi directement : il vaut HT + TVA, et c'est lui qui
+/// justifie le solde du compte. Saisir le HT et choisir un taux suffit ; la TVA
+/// reste modifiable pour les cas ou l'arrondi ou un taux mixte l'exigent.
+private struct ReconItemVentileRow: View {
+    @Bindable var item: ReconItem
+    let comptesCharge: [BalanceAccount]
+    var onCommit: () -> Void
+    var onDelete: () -> Void
+    var onLink: () -> Void
+    var onOpen: () -> Void
+    var onRemoveDoc: () -> Void
+
+    @State private var htText = ""
+    @State private var tvaText = ""
+
+    private static let tauxProposes: [Double] = [20, 10, 5.5, 2.1, 0]
+
+    var body: some View {
+        HStack(spacing: 8) {
+            TextField("Fournisseur, objet…", text: $item.libelle)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 220)
+                .onChange(of: item.libelle) { _, _ in onCommit() }
+
+            // Compte de charge : saisie libre, avec les comptes de la balance en
+            // suggestion — le plan comptable ne couvre pas toujours le cas.
+            HStack(spacing: 2) {
+                TextField("6…", text: $item.compteCharge)
+                    .textFieldStyle(.roundedBorder)
+                    .monospaced()
+                    .onChange(of: item.compteCharge) { _, _ in onCommit() }
+                if !comptesCharge.isEmpty {
+                    Menu {
+                        ForEach(comptesCharge) { c in
+                            Button("\(c.accountNumber) — \(c.accountLabel.isEmpty ? c.accountCode : c.accountLabel)") {
+                                item.compteCharge = c.accountNumber
+                                onCommit()
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down").font(.caption2)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                }
+            }
+            .frame(width: 120)
+
+            TextField("0", text: $htText)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 100).multilineTextAlignment(.trailing).monospacedDigit()
+                .onSubmit(commitHT)
+
+            Picker("", selection: Binding(
+                get: { item.tauxTva },
+                set: { item.tauxTva = $0; item.recalculerDepuisHT(); refresh(); onCommit() }
+            )) {
+                ForEach(Self.tauxProposes, id: \.self) { t in
+                    Text(t == 0 ? "—" : "\(formatTaux(t)) %").tag(t)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 70)
+
+            TextField("0", text: $tvaText)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 100).multilineTextAlignment(.trailing).monospacedDigit()
+                .onSubmit(commitTva)
+
+            Text(formatEuro(item.montant))
+                .monospacedDigit().fontWeight(.medium)
+                .frame(width: 100, alignment: .trailing)
+
+            RefCell(reconItem: item, onOpen: onOpen, onLink: onLink, onRemove: onRemoveDoc)
+                .frame(width: 150, alignment: .leading)
+
+            Button(role: .destructive, action: onDelete) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+        }
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        htText = item.montantHT == 0 ? "" : String(format: "%.2f", item.montantHT)
+        tvaText = item.montantTva == 0 ? "" : String(format: "%.2f", item.montantTva)
+    }
+
+    private func commitHT() {
+        item.montantHT = Self.nombre(htText)
+        item.recalculerDepuisHT()
+        refresh()
+        onCommit()
+    }
+
+    private func commitTva() {
+        item.montantTva = Self.nombre(tvaText)
+        item.montant = item.montantHT + item.montantTva
+        refresh()
+        onCommit()
+    }
+
+    private func formatTaux(_ t: Double) -> String {
+        t == t.rounded() ? String(format: "%.0f", t) : String(format: "%.1f", t)
+    }
+
+    /// Montant a la francaise : espaces de milliers et virgule decimale.
+    private static func nombre(_ s: String) -> Double {
+        Double(s.replacingOccurrences(of: "\u{00A0}", with: "")
+            .replacingOccurrences(of: " ", with: "")
+            .replacingOccurrences(of: ",", with: ".")
+            .trimmingCharacters(in: .whitespaces)) ?? 0
+    }
+}
+
+// MARK: - Points en suspens et notes rattaches a un compte
+
+/// Contexte de saisie d'un point rattache a un compte.
+struct SaisiePending: Identifiable {
+    let id = UUID()
+    let compte: String
+    let intitule: String
+    let type: PendingKind
+}
+
+/// Les deux boutons de la colonne « Suspens / Note ».
+///
+/// Le compteur ne montre que les points encore ouverts : un compte dont tout est
+/// traite doit se lire comme un compte propre.
+private struct PendingButtonsCell: View {
+    let compteurs: (suspens: Int, notes: Int)
+    let onSuspens: () -> Void
+    let onNote: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Button(action: onSuspens) {
+                HStack(spacing: 3) {
+                    Image(systemName: "exclamationmark.bubble")
+                    if compteurs.suspens > 0 {
+                        Text("\(compteurs.suspens)").font(.caption2).monospacedDigit()
+                    }
+                }
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(compteurs.suspens > 0 ? Color.orange : Color.secondary)
+            .help("Ajouter un point en suspens sur ce compte")
+
+            Button(action: onNote) {
+                HStack(spacing: 3) {
+                    Image(systemName: "note.text")
+                    if compteurs.notes > 0 {
+                        Text("\(compteurs.notes)").font(.caption2).monospacedDigit()
+                    }
+                }
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(compteurs.notes > 0 ? Color.blue : Color.secondary)
+            .help("Ajouter une note sur ce compte")
+        }
+    }
+}
+
+/// Saisie d'un point en suspens ou d'une note sur un compte.
+///
+/// Une note est une information : elle n'a ni priorite ni echeance. Un point en
+/// suspens est un travail a faire, donc les porte.
+struct PendingItemEditor: View {
+    let contexte: SaisiePending
+    let cycle: RevisionCycle
+    let exerciceID: UUID
+    let onSave: (PendingItem) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var titre = ""
+    @State private var detail = ""
+    @State private var priorite: PendingPriority = .normale
+    @State private var responsable = ""
+    @State private var avecEcheance = false
+    @State private var echeance = Date()
+
+    private var estTache: Bool { contexte.type == .tache }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Label(estTache ? "Nouveau point en suspens" : "Nouvelle note",
+                      systemImage: contexte.type.icon)
+                    .font(.headline)
+                Text("Compte \(contexte.compte) — \(contexte.intitule)")
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("Cycle \(cycle.letter) — \(cycle.shortName)")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding()
+
+            Divider()
+
+            Form {
+                TextField("Intitulé", text: $titre)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Détail").font(.caption).foregroundStyle(.secondary)
+                    TextEditor(text: $detail)
+                        .frame(height: 110)
+                        .font(.body)
+                        .overlay(RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.secondary.opacity(0.3)))
+                }
+
+                if estTache {
+                    Picker("Priorité", selection: $priorite) {
+                        ForEach(PendingPriority.allCases, id: \.self) { p in
+                            Text(p.rawValue).tag(p)
+                        }
+                    }
+
+                    TextField("Responsable", text: $responsable)
+
+                    Toggle("Échéance", isOn: $avecEcheance)
+                    if avecEcheance {
+                        DatePicker("", selection: $echeance, displayedComponents: .date)
+                            .labelsHidden()
+                    }
+                }
+            }
+            .formStyle(.grouped)
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Annuler", role: .cancel) { dismiss() }
+                Button(estTache ? "Créer le point" : "Créer la note") {
+                    let item = PendingItem(
+                        exerciceID: exerciceID,
+                        cycleRaw: cycle.rawValue,
+                        accountNumber: contexte.compte,
+                        titre: titre.trimmingCharacters(in: .whitespaces),
+                        detail: detail,
+                        type: contexte.type,
+                        priorite: estTache ? priorite : .normale,
+                        responsable: estTache ? responsable : "",
+                        echeance: (estTache && avecEcheance) ? echeance : nil
+                    )
+                    onSave(item)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(titre.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding()
+        }
+        .frame(width: 480)
     }
 }
 

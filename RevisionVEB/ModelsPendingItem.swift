@@ -11,14 +11,26 @@ import SwiftData
 import SwiftUI
 
 /// Nature du point : simple observation ou travail a realiser.
+///
+/// Les libelles affiches sont « Note » et « Point en suspens ». Les valeurs
+/// stockees restent « Commentaire » et « Tâche » : elles sont deja en base et
+/// sur Supabase, les renommer invaliderait l'existant.
 enum PendingKind: String, Codable, CaseIterable {
     case commentaire = "Commentaire"
     case tache       = "Tâche"
 
+    /// Libelle affiche a l'utilisateur.
+    var label: String {
+        switch self {
+        case .commentaire: return "Note"
+        case .tache:       return "Point en suspens"
+        }
+    }
+
     var icon: String {
         switch self {
-        case .commentaire: return "text.bubble"
-        case .tache:       return "checkmark.square"
+        case .commentaire: return "note.text"
+        case .tache:       return "exclamationmark.bubble"
         }
     }
 
@@ -97,6 +109,9 @@ final class PendingItem {
     @Attribute(.unique) var id: UUID = UUID()
     var exerciceID: UUID = UUID()
     var cycleRaw: String = ""
+    /// Compte auquel le point se rattache. Vide pour un point qui porte sur le
+    /// cycle entier. Valeur par defaut : l'ajout reste une migration additive.
+    var accountNumber: String = ""
     var titre: String = ""
     var detail: String = ""
     var typeRaw: String = PendingKind.commentaire.rawValue
@@ -109,6 +124,7 @@ final class PendingItem {
 
     init(exerciceID: UUID,
          cycleRaw: String,
+         accountNumber: String = "",
          titre: String = "",
          detail: String = "",
          type: PendingKind = .commentaire,
@@ -119,6 +135,7 @@ final class PendingItem {
         self.id = UUID()
         self.exerciceID = exerciceID
         self.cycleRaw = cycleRaw
+        self.accountNumber = accountNumber
         self.titre = titre
         self.detail = detail
         self.typeRaw = type.rawValue

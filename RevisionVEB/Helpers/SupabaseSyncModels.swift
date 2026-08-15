@@ -333,7 +333,11 @@ extension SupabaseSync {
                 "montant": self.safe(i.montant),
                 "ordre": i.ordre,
                 "doc_name": i.docName,
-                "doc_path": i.docPath
+                "doc_path": i.docPath,
+                "compte_charge": i.compteCharge,
+                "montant_ht": self.safe(i.montantHT),
+                "taux_tva": self.safe(i.tauxTva),
+                "montant_tva": self.safe(i.montantTva)
             ]
         }
 
@@ -408,6 +412,64 @@ extension SupabaseSync {
                 "cycle_raw": r.cycleRaw
             ]
         }
+
+        // DSN Assiettes (Cycle H)
+        await push("dsn_assiettes", all(DsnAssiette.self), label: "DSN Assiettes", id: { $0.id }) { d in
+            [
+                "id": d.id.pg,
+                "exercice_id": d.exerciceID.pg,
+                "mois": d.mois,
+                "annee": d.annee,
+                "etablissement": d.etablissement,
+                "siret": d.siret,
+                "assiette_brute": self.safe(d.assietteBrute),
+                "poste_retenu": d.posteRetenu,
+                "ctp_100d": d.ctp100d.map { self.safe($0) } ?? NSNull(),
+                "fichier_source": d.fichierSource,
+                "date_extraction": d.dateExtraction.ISO8601Format()
+            ]
+        }
+
+        // Pieces justificatives rattachees a un cycle
+        await push("cycle_pieces", all(CyclePiece.self), label: "Pièces de cycle", id: { $0.id }) { p in
+            [
+                "id": p.id.pg,
+                "exercice_id": p.exerciceID.pg,
+                "cycle_raw": p.cycleRaw,
+                "categorie": p.categorie,
+                "libelle": p.libelle,
+                "mois": p.mois,
+                "annee": p.annee,
+                "etablissement": p.etablissement,
+                "doc_name": p.docName,
+                "doc_path": p.docPath,
+                "note": p.note,
+                "ordre": p.ordre,
+                "ajoute_le": p.ajouteLe.ISO8601Format()
+            ]
+        }
+
+        // Reconciliations sociales (Cycle H)
+        await push("social_reconciliations", all(SocialReconciliation.self), label: "Rapprochements sociaux", id: { $0.id }) { s in
+            [
+                "id": s.id.pg,
+                "exercice_id": s.exerciceID.pg,
+                "mois": s.mois,
+                "annee": s.annee,
+                "etablissement": s.etablissement,
+                "siret": s.siret,
+                "solde_gl": self.safe(s.soldeGL),
+                "solde_gl_details": s.soldeGLDetails,
+                "solde_dsn": self.safe(s.soldeDisn),
+                "poste_dsn_retenu": s.posteDsnRetenu,
+                "ecart": self.safe(s.ecart),
+                "retraitement": self.safe(s.retraitement),
+                "ecart_residuel": self.safe(s.ecartResiduel),
+                "statut": s.statut.rawValue,
+                "commentaire": s.commentaire,
+                "date_calcul": s.dateCalcul.ISO8601Format()
+            ]
+        }
     }
 
     // MARK: - Pièces justificatives
@@ -429,6 +491,7 @@ extension SupabaseSync {
         docs += paths(ReconItem.self) { ($0.docPath, $0.exerciceID) }
         docs += paths(ImmoInvoice.self) { ($0.docPath, $0.exerciceID) }
         docs += paths(Ca3Period.self) { ($0.docPath, $0.exerciceID) }
+        docs += paths(CyclePiece.self) { ($0.docPath, $0.exerciceID) }
 
         // Seuls les fichiers réellement présents sur cette machine sont candidats.
         let local = docs.filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -470,6 +533,9 @@ extension SupabaseSync {
         await loadImmoAssetsMerged(using: context)
         await loadClass2Movements(using: context)
         await loadCycleRules(using: context)
+        await loadDsnAssiettes(using: context)
+        await loadSocialReconciliations(using: context)
+        await loadCyclePieces(using: context)
 
         do {
             try context.save()
@@ -626,6 +692,10 @@ extension SupabaseSync {
             target.libelle = str(r["libelle"])
             target.montant = dbl(r["montant"])
             target.ordre = int(r["ordre"])
+            target.compteCharge = str(r["compte_charge"])
+            target.montantHT = dbl(r["montant_ht"])
+            target.tauxTva = dbl(r["taux_tva"])
+            target.montantTva = dbl(r["montant_tva"])
             if target.docPath.isEmpty {
                 target.docName = str(r["doc_name"])
                 target.docPath = str(r["doc_path"])
@@ -815,6 +885,133 @@ extension SupabaseSync {
             }
         }
         print("  ✅ Règles de cycle: \(added) ajoutées")
+    }
+
+    private func loadDsnAssiettes(using context: ModelContext) async {
+        guard let rows = await fetchRows("dsn_assiettes", label: "DSN Assiettes") else { return }
+        let locals = (try? context.fetch(FetchDescriptor<DsnAssiette>())) ?? []
+        var byId = Dictionary(locals.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        var added = 0, merged = 0
+        for r in rows {
+            guard let id = uuid(r["id"]),
+                  let exID = uuid(r["exercice_id"]) else { continue }
+            let remote = date(r["date_extraction"]) ?? .distantPast
+            if let local = byId[id] {
+                guard remote > local.dateExtraction else { continue }
+                local.assietteBrute = dbl(r["assiette_brute"])
+                local.posteRetenu = str(r["poste_retenu"])
+                local.ctp100d = r["ctp_100d"] is NSNull ? nil : dbl(r["ctp_100d"])
+                merged += 1
+            } else {
+                let d = DsnAssiette(
+                    exerciceID: exID,
+                    mois: int(r["mois"]) ?? 1,
+                    annee: int(r["annee"]) ?? 2025,
+                    etablissement: str(r["etablissement"]),
+                    siret: str(r["siret"]),
+                    assietteBrute: dbl(r["assiette_brute"]),
+                    posteRetenu: str(r["poste_retenu"]),
+                    ctp100d: r["ctp_100d"] is NSNull ? nil : dbl(r["ctp_100d"]),
+                    fichierSource: str(r["fichier_source"]),
+                    dateExtraction: remote
+                )
+                context.insert(d)
+                byId[id] = d
+                added += 1
+            }
+        }
+        print("  ✅ DSN Assiettes: \(added) ajoutées, \(merged) mises à jour")
+    }
+
+    private func loadCyclePieces(using context: ModelContext) async {
+        guard let rows = await fetchRows("cycle_pieces", label: "Pièces de cycle") else { return }
+        let locals = (try? context.fetch(FetchDescriptor<CyclePiece>())) ?? []
+        var byID = Dictionary(locals.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        var added = 0, merged = 0
+        for r in rows {
+            guard let id = uuid(r["id"]), let exID = uuid(r["exercice_id"]) else { continue }
+
+            let target: CyclePiece
+            if let local = byID[id] {
+                target = local
+                merged += 1
+            } else {
+                let cycle = RevisionCycle(rawValue: str(r["cycle_raw"])) ?? .nonClasse
+                let p = CyclePiece(id: id, exerciceID: exID, cycle: cycle)
+                context.insert(p)
+                byID[id] = p
+                target = p
+                added += 1
+            }
+
+            target.cycleRaw = str(r["cycle_raw"])
+            target.categorie = str(r["categorie"])
+            target.libelle = str(r["libelle"])
+            target.mois = int(r["mois"])
+            target.annee = int(r["annee"])
+            target.etablissement = str(r["etablissement"])
+            target.note = str(r["note"])
+            target.ordre = int(r["ordre"])
+            target.ajouteLe = date(r["ajoute_le"]) ?? target.ajouteLe
+
+            // Le chemin est propre a chaque Mac : on ne l'ecrase que s'il est
+            // vide ici, sinon on perdrait le fichier deja present en local.
+            if target.docPath.isEmpty {
+                target.docName = str(r["doc_name"])
+                target.docPath = str(r["doc_path"])
+            }
+        }
+        print("  ✅ Pièces de cycle: \(added) ajoutées, \(merged) mises à jour")
+    }
+
+    private func loadSocialReconciliations(using context: ModelContext) async {
+        guard let rows = await fetchRows("social_reconciliations", label: "Rapprochements sociaux") else { return }
+        let locals = (try? context.fetch(FetchDescriptor<SocialReconciliation>())) ?? []
+        var byId = Dictionary(locals.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        var added = 0, merged = 0
+        for r in rows {
+            guard let id = uuid(r["id"]),
+                  let exID = uuid(r["exercice_id"]) else { continue }
+            let remote = date(r["date_calcul"]) ?? .distantPast
+            if let local = byId[id] {
+                guard remote > local.dateCalcul else { continue }
+                local.soldeGL = dbl(r["solde_gl"])
+                local.soldeGLDetails = str(r["solde_gl_details"])
+                local.soldeDisn = dbl(r["solde_dsn"])
+                local.posteDsnRetenu = str(r["poste_dsn_retenu"])
+                local.ecart = dbl(r["ecart"])
+                local.retraitement = dbl(r["retraitement"])
+                local.ecartResiduel = dbl(r["ecart_residuel"])
+                local.statut = ReconciliationStatus(rawValue: str(r["statut"])) ?? .ok
+                local.commentaire = str(r["commentaire"])
+                merged += 1
+            } else {
+                let s = SocialReconciliation(
+                    exerciceID: exID,
+                    mois: int(r["mois"]) ?? 1,
+                    annee: int(r["annee"]) ?? 2025,
+                    etablissement: str(r["etablissement"]),
+                    siret: str(r["siret"])
+                )
+                s.soldeGL = dbl(r["solde_gl"])
+                s.soldeGLDetails = str(r["solde_gl_details"])
+                s.soldeDisn = dbl(r["solde_dsn"])
+                s.posteDsnRetenu = str(r["poste_dsn_retenu"])
+                s.ecart = dbl(r["ecart"])
+                s.retraitement = dbl(r["retraitement"])
+                s.ecartResiduel = dbl(r["ecart_residuel"])
+                s.statut = ReconciliationStatus(rawValue: str(r["statut"])) ?? .ok
+                s.commentaire = str(r["commentaire"])
+                s.dateCalcul = remote
+                context.insert(s)
+                byId[id] = s
+                added += 1
+            }
+        }
+        print("  ✅ Rapprochements sociaux: \(added) ajoutés, \(merged) mis à jour")
     }
 
     // MARK: - Suppressions

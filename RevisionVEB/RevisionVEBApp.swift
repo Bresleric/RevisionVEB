@@ -35,6 +35,11 @@ struct RevisionVEBApp: App {
             ImmoAsset.self,
             SoldesIntermedialres.self,
             PendingItem.self,
+            SocialPayrollEntry.self,
+            DsnAssiette.self,
+            SocialReconciliation.self,
+            SocialAnomaly.self,
+            CyclePiece.self,
         ])
 
         // Supabase est la source de vérité. SwiftData = cache local synchronisé.
