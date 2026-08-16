@@ -563,6 +563,12 @@ final class ImmoInvoice {
     var docPath: String = ""
     var docBookmark: Data? = nil
     var ordre: Int = 0
+    /// Date de derniere modification, pour arbitrer entre deux Macs.
+    ///
+    /// Sans elle, chaque machine ecrasait la version de l'autre a chaque
+    /// synchronisation : la derniere a se synchroniser gagnait, sans qu'aucune
+    /// ne sache laquelle portait la saisie la plus recente.
+    var updatedAt: Date = Date()
 
     init(id: UUID = UUID(), exerciceID: UUID, date: Date = Date(), compte: String = "",
          designation: String = "", montant: Double = 0, ordre: Int = 0) {
@@ -573,9 +579,12 @@ final class ImmoInvoice {
         self.designation = designation
         self.montant = montant
         self.ordre = ordre
+        self.updatedAt = Date()
     }
 
     var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
+
+    func touch() { updatedAt = Date() }
 }
 
 /// Soldes Intermédiaires de Gestion (SIG) - 8 étapes du compte de résultat.

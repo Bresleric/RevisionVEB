@@ -1845,8 +1845,14 @@ struct SigView: View {
 
         return [
             // ÉTAPE 1 : MARGE BRUTE
-            ("Ventes", sig.caHT, sig.caHTN1, sumN2(for: ["70", "71"]), false, nil),
-            ("– Matières premières", sig.coutsDirects, sig.coutsDirectsN1, sumN2(for: ["60"]), false, nil),
+            // La colonne N-2 est recalculee ici, hors du moteur : elle doit
+            // suivre exactement les memes regles, sans quoi elle raconte autre
+            // chose que les colonnes N et N-1. Les ventes sont crediteuses, donc
+            // negatives en balance : il faut inverser le signe. Et les matieres
+            // excluent le 606, compte a part dans les consommations externes.
+            ("Ventes", sig.caHT, sig.caHTN1, sumN2(for: ["70"], negate: true), false, nil),
+            ("– Matières premières", sig.coutsDirects, sig.coutsDirectsN1,
+             sumN2(for: ["601", "602", "603", "607", "608", "609"]), false, nil),
             ("= Marge brute", sig.margeBrute, sig.margeBruteN1, sig.margeBruteN2, true, nil),
 
             // ÉTAPE 2 : VALEUR AJOUTÉE
@@ -1995,6 +2001,54 @@ enum SigCalculator {
         print("📊 SIG N: Marge=\(sigN.margeBrute), CA=\(vars.caHT), Coûts=\(vars.coutsDirects)")
         print("📊 SIG N-1: Marge=\(sigNMinus1.margeBrute)")
         print("📊 SIG N-2: Marge=\(sigNMinus2.margeBrute) (depuis cache JSON)")
+
+        // Controle des frais de personnel : le poste le plus expose aux doublons,
+        // parce qu'il agrege une trentaine de comptes. Un compte present deux
+        // fois double sa contribution — et si le doublon n'a pas de solde N-1,
+        // seul l'exercice courant est fausse, ce qui est indetectable a l'oeil.
+        let comptes64 = exerciseAccounts.filter { acc in
+            ["641", "642", "643", "644", "645", "646", "647", "648"]
+                .contains { acc.accountNumber.hasPrefix($0) }
+        }
+        let doublons64 = Dictionary(grouping: comptes64, by: { $0.accountNumber })
+            .filter { $0.value.count > 1 }
+
+        print(String(format: "📊 Frais de personnel : N = %.2f | N-1 = %.2f | %d comptes 64x",
+                     vars.fraisPersonnel, varsN1.fraisPersonnel, comptes64.count))
+
+        if !doublons64.isEmpty {
+            print("⚠️ SIG : \(doublons64.count) compte(s) 64x en double dans la base — le total N est faussé")
+            for (numero, lignes) in doublons64.sorted(by: { $0.key < $1.key }) {
+                let details = lignes
+                    .map { String(format: "N=%.2f N-1=%.2f (%@)", $0.balanceN, $0.balanceNMinus1, $0.sourceFile) }
+                    .joined(separator: " | ")
+                print("   \(numero) × \(lignes.count) : \(details)")
+            }
+        }
+
+        // Comptes de classe 6 hors postes agreges : ils disparaissent du SIG
+        // sans que rien ne le signale.
+        let prefixesConnus = ["60", "606", "611", "612", "613", "614", "615", "616", "617", "618",
+                              "621", "622", "623", "624", "625", "626", "627", "628",
+                              "631", "632", "633", "634", "635", "636", "637", "638",
+                              "641", "642", "643", "644", "645", "646", "647", "648",
+                              "651", "652", "653", "654", "655", "656", "657", "658",
+                              "661", "662", "663", "664", "665",
+                              "671", "672", "673", "674", "675",
+                              "681", "682", "683", "684", "685", "695"]
+        let oublies = exerciseAccounts.filter { acc in
+            acc.accountNumber.hasPrefix("6")
+                && acc.balanceN != 0
+                && !prefixesConnus.contains { acc.accountNumber.hasPrefix($0) }
+        }
+        if !oublies.isEmpty {
+            let total = oublies.reduce(0) { $0 + $1.balanceN }
+            print(String(format: "⚠️ SIG : %d compte(s) de classe 6 hors SIG, soit %.2f €",
+                         oublies.count, total))
+            for acc in oublies.sorted(by: { $0.accountNumber < $1.accountNumber }) {
+                print(String(format: "   %@ %@ : %.2f", acc.accountNumber, acc.accountLabel, acc.balanceN))
+            }
+        }
 
         // Créer ou mettre à jour le SIG
         var sig = SoldesIntermedialres(exerciceID: exerciceID)
@@ -3082,11 +3136,13 @@ struct ImmoInvoicesView: View {
                 ForEach(invoices) { inv in
                     ImmoInvoiceRow(
                         invoice: inv, immoAccounts: immoAccounts,
-                        onCommit: { try? modelContext.save() },
+                        // Chaque saisie horodate la ligne : c'est ce qui permet
+                        // a la synchronisation de savoir quel Mac fait foi.
+                        onCommit: { inv.touch(); try? modelContext.save() },
                         onDelete: { removeDoc(inv); modelContext.delete(inv); try? modelContext.save() },
                         onLink: { pendingItem = inv; showImporter = true },
                         onOpen: { openJustificationDocument(path: inv.docPath, bookmark: inv.docBookmark) },
-                        onRemoveDoc: { removeDoc(inv); try? modelContext.save() }
+                        onRemoveDoc: { removeDoc(inv); inv.touch(); try? modelContext.save() }
                     )
                 }
 
@@ -3111,6 +3167,7 @@ struct ImmoInvoicesView: View {
         let label = inv.compte.isEmpty ? "immo" : inv.compte
         guard let copied = JustificatifStore.copyIn(source: url, exerciceID: exerciceID, accountNumber: "G \(label)") else { return }
         inv.docPath = copied.path; inv.docName = copied.name; inv.docBookmark = nil
+        inv.touch()
         uploadJustificatif(path: copied.path)
         try? modelContext.save()
     }

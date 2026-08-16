@@ -164,8 +164,40 @@ extension SupabaseSync {
         }
     }
 
-    private func date(_ any: Any?) -> Date? {
-        (any as? String).flatMap { ISO8601DateFormatter().date(from: $0) }
+    /// Lit une date renvoyee par PostgREST, quel que soit le type de la colonne.
+    ///
+    /// Une colonne `timestamptz` renvoie « 2025-10-08T00:00:00Z », qu'un
+    /// `ISO8601DateFormatter` par defaut sait lire. Une colonne `date` renvoie
+    /// « 2025-10-08 » — sans heure — et ce meme lecteur echoue silencieusement.
+    /// L'appelant retombait alors sur la valeur locale, c'est-a-dire la date du
+    /// jour pour une ligne fraichement creee : les dates de facture etaient
+    /// remplacees par la date de synchronisation.
+    private func date(_ any: Any?) -> Date? { Self.parseDate(any) }
+
+    static func parseDate(_ any: Any?) -> Date? {
+        guard let texte = (any as? String)?.trimmingCharacters(in: .whitespaces),
+              !texte.isEmpty else { return nil }
+
+        // Horodatage complet, avec ou sans fraction de seconde.
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        if let d = iso.date(from: texte) { return d }
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = iso.date(from: texte) { return d }
+
+        // Date seule, ou horodatage Postgres sans « T ».
+        let formats = ["yyyy-MM-dd",
+                       "yyyy-MM-dd HH:mm:ss",
+                       "yyyy-MM-dd HH:mm:ssZ",
+                       "yyyy-MM-dd'T'HH:mm:ss"]
+        let df = DateFormatter()
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.timeZone = TimeZone(secondsFromGMT: 0)
+        for f in formats {
+            df.dateFormat = f
+            if let d = df.date(from: texte) { return d }
+        }
+        return nil
     }
 
     private func dbl(_ any: Any?) -> Double { (any as? NSNumber)?.doubleValue ?? 0 }
@@ -440,7 +472,8 @@ extension SupabaseSync {
                 "montant": self.safe(f.montant),
                 "doc_name": f.docName,
                 "doc_path": f.docPath,
-                "ordre": f.ordre
+                "ordre": f.ordre,
+                "updated_at": f.updatedAt.ISO8601Format()
             ]
         }
 
@@ -830,12 +863,20 @@ extension SupabaseSync {
         let locals = (try? context.fetch(FetchDescriptor<ImmoInvoice>())) ?? []
         var byID = Dictionary(locals.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
-        var added = 0
+        var added = 0, merged = 0
         for r in rows {
             guard let id = uuid(r["id"]), let exID = uuid(r["exercice_id"]) else { continue }
+            // Sans date de modification distante, on considere la ligne comme
+            // ancienne : la saisie locale n'est jamais ecrasee par defaut.
+            let distante = date(r["updated_at"]) ?? .distantPast
+
             let target: ImmoInvoice
             if let local = byID[id] {
+                // La version locale est plus recente : elle repartira au
+                // prochain envoi, on ne la remplace pas.
+                guard distante > local.updatedAt else { continue }
                 target = local
+                merged += 1
             } else {
                 let f = ImmoInvoice(exerciceID: exID)
                 f.id = id
@@ -849,12 +890,13 @@ extension SupabaseSync {
             target.designation = str(r["designation"])
             target.montant = dbl(r["montant"])
             target.ordre = int(r["ordre"])
+            target.updatedAt = distante
             if target.docPath.isEmpty {
                 target.docName = str(r["doc_name"])
                 target.docPath = str(r["doc_path"])
             }
         }
-        print("  ✅ Factures immo: \(added) ajoutées")
+        print("  ✅ Factures immo: \(added) ajoutées, \(merged) mises à jour")
     }
 
     private func loadImmoAssetsMerged(using context: ModelContext) async {
