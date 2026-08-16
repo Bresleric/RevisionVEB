@@ -1239,6 +1239,61 @@ class SupabaseSync {
 
     }
 
+    /// Abandonne le cache local et le reconstruit entierement depuis Supabase.
+    ///
+    /// Quand deux Macs ont diverge, les reconcilier ligne a ligne est vain :
+    /// chacun defend sa version. Cette operation tranche autrement — elle
+    /// declare Supabase seul depositaire et jette ce que la machine croyait
+    /// savoir. C'est le sens meme du modele affiche au demarrage : source de
+    /// verite Supabase, cache local SwiftData.
+    ///
+    /// N'ENVOIE RIEN avant d'effacer : c'est deliberé. Pousser d'abord
+    /// reintroduirait sur Supabase precisement les valeurs qu'on cherche a
+    /// abandonner.
+    ///
+    /// Ne touche qu'aux modeles reellement synchronises. Le grand livre 641 et
+    /// les factures scannees ne le sont pas : les effacer serait une perte
+    /// seche, sans rien pour les restaurer.
+    func adopterVersionDistante(from container: ModelContainer) async {
+        print("\n♻️ Abandon du cache local, rechargement intégral depuis Supabase")
+        let context = ModelContext(container)
+
+        do {
+            try context.delete(model: Dossier.self)
+            try context.delete(model: Exercice.self)
+            try context.delete(model: BalanceAccount.self)
+            try context.delete(model: AccountCycleRule.self)
+            try context.delete(model: SoldesIntermedialres.self)
+            try context.delete(model: ControlState.self)
+            try context.delete(model: AccountJustification.self)
+            try context.delete(model: PendingItem.self)
+            try context.delete(model: TvaCompteTaux.self)
+            try context.delete(model: BankReconciliation.self)
+            try context.delete(model: ReconItem.self)
+            try context.delete(model: Ca3Entry.self)
+            try context.delete(model: Ca3Period.self)
+            try context.delete(model: ImmoInvoice.self)
+            try context.delete(model: ImmoAsset.self)
+            try context.delete(model: Class2Movement.self)
+            try context.delete(model: DsnAssiette.self)
+            try context.delete(model: SocialReconciliation.self)
+            try context.delete(model: CyclePiece.self)
+            try context.save()
+            print("♻️ Cache local vidé")
+        } catch {
+            print("❌ Vidage du cache: \(error.localizedDescription)")
+            return
+        }
+
+        await loadAllFromSupabase(using: context)
+        do {
+            try context.save()
+            print("♻️ Rechargement terminé — cette machine reflète désormais Supabase")
+        } catch {
+            print("❌ Rechargement: \(error.localizedDescription)")
+        }
+    }
+
     /// Nettoyage a executer APRES le chargement.
     ///
     /// Le dedoublonnage du debut de synchronisation ne voit que l'etat local

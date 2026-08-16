@@ -17,6 +17,8 @@ struct SettingsView: View {
     
     @State private var showingResetAlert = false
     @State private var showingDemoDataAlert = false
+    @State private var showingAdoptAlert = false
+    @State private var adoptionEnCours = false
     
     var body: some View {
         ScrollView {
@@ -152,7 +154,27 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                         
                         Divider()
-                        
+
+                        // Sortie de secours quand deux Macs ont divergé : plutôt
+                        // que de réconcilier ligne à ligne, on déclare Supabase
+                        // seul dépositaire et on jette ce que cette machine
+                        // croyait savoir.
+                        Button {
+                            showingAdoptAlert = true
+                        } label: {
+                            Label(adoptionEnCours ? "Rechargement en cours…" : "Recharger tout depuis Supabase",
+                                  systemImage: "arrow.trianglehead.2.clockwise.rotate.90")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(adoptionEnCours)
+
+                        Text("Abandonne le cache de ce Mac et le reconstruit depuis Supabase. À utiliser quand deux machines divergent : celle-ci adoptera la version de l'autre.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Divider()
+
                         Button(role: .destructive) {
                             showingResetAlert = true
                         } label: {
@@ -178,6 +200,20 @@ struct SettingsView: View {
             }
         } message: {
             Text("Cela va remplacer toutes les données actuelles par des données de test.")
+        }
+        .alert("Recharger tout depuis Supabase ?", isPresented: $showingAdoptAlert) {
+            Button("Annuler", role: .cancel) { }
+            Button("Recharger", role: .destructive) {
+                adoptionEnCours = true
+                Task {
+                    await SupabaseSync.shared.adopterVersionDistante(from: modelContext.container)
+                    adoptionEnCours = false
+                }
+            }
+        } message: {
+            Text("Ce Mac abandonne son cache et adopte intégralement la version présente sur Supabase.\n\n"
+                 + "Rien n'est envoyé au préalable : toute saisie faite ici et pas encore synchronisée sera perdue. "
+                 + "Le grand livre 641 et les factures scannées ne sont pas concernés — ils ne sont pas synchronisés et restent en place.")
         }
         .alert("Réinitialiser les données ?", isPresented: $showingResetAlert) {
             Button("Annuler", role: .cancel) { }
