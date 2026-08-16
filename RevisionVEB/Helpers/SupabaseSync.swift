@@ -1054,6 +1054,12 @@ class SupabaseSync {
         print("\n📥 ÉTAPE 2: Chargement Supabase → local")
         await loadAllFromSupabase(using: context)
 
+        // ÉTAPE 3 : nettoyer ce que le chargement vient de rapporter. Sans elle,
+        // les comptes d'un import perime traversaient la session et faussaient
+        // les soldes intermediaires jusqu'au redemarrage suivant.
+        print("\n🧹 ÉTAPE 3: Nettoyage après chargement")
+        await nettoyageApresChargement(from: container)
+
         SyncDiagnostics.report()
         print("\n✅ Synchronisation complétée!")
     }
@@ -1231,5 +1237,20 @@ class SupabaseSync {
             print("❌ Erreur sauvegarde: \(error)")
         }
 
+    }
+
+    /// Nettoyage a executer APRES le chargement.
+    ///
+    /// Le dedoublonnage du debut de synchronisation ne voit que l'etat local
+    /// d'avant : les comptes obsoletes arrivent au chargement, donc apres lui.
+    /// Ils traversaient toute la session et les soldes intermediaires se
+    /// calculaient dessus — le nettoyage ne prenait effet qu'au demarrage
+    /// suivant, ce qui donnait l'impression qu'il ne servait a rien.
+    ///
+    /// C'est aussi le seul moment ou le jeu local reflete l'integralite de la
+    /// table distante, donc celui ou la suppression a distance est sure.
+    func nettoyageApresChargement(from container: ModelContainer) async {
+        await dedupeBalanceAccounts(from: container)
+        await dedupeDsnAssiettes(from: container)
     }
 }

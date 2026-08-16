@@ -264,6 +264,12 @@ extension SupabaseSync {
 
         let aSupprimer = doomed + perimes
         guard !aSupprimer.isEmpty else { return }
+
+        // Suppression distante aussi : sans elle, ces comptes redescendent au
+        // prochain chargement et il faut les ecarter a chaque demarrage. La
+        // decision est fiable, le jeu local reflechissant l'integralite de la
+        // table distante — il vient d'en etre charge.
+        let identifiants = aSupprimer.map { $0.id }
         for account in aSupprimer { context.delete(account) }
         do {
             try context.save()
@@ -272,7 +278,13 @@ extension SupabaseSync {
             }
         } catch {
             print("⚠️ Dédoublonnage balance: \(error.localizedDescription)")
+            return
         }
+
+        for id in identifiants {
+            await deleteRemote(table: "balance_accounts", id: id)
+        }
+        print("🧹 Balance: \(identifiants.count) compte(s) supprimé(s) aussi sur Supabase")
     }
 
     /// Ne conserve qu'un jeu de soldes intermédiaires par exercice.
