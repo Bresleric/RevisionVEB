@@ -98,7 +98,9 @@ class SupabaseSync {
             guard !accounts.isEmpty else { return }
 
             print("📤 Balance Accounts: \(accounts.count)")
-            await bulkUpsert(tableName: "balance_accounts", rows: accounts.map { a in
+            await bulkUpsert(tableName: "balance_accounts",
+                             onConflict: "exercice_id,account_number",
+                             rows: accounts.map { a in
                 [
                     "id": a.id.pg,
                     "account_number": a.accountNumber,
@@ -374,13 +376,23 @@ class SupabaseSync {
     /// passait par 600 allers-retours séquentiels — d'où les dizaines de secondes
     /// avant que les données n'apparaissent. Elle tient maintenant en une poignée
     /// de requêtes, et le choix POST/PATCH disparaît avec les conflits de clé.
-    func bulkUpsert(tableName: String, rows: [[String: Any]]) async {
+    /// `onConflict` nomme les colonnes de la contrainte d'unicite a viser.
+    ///
+    /// Par defaut PostgREST resout les conflits sur la cle primaire. Quand une
+    /// table porte en plus une cle logique — un compte par exercice, une
+    /// assiette par mois et par etablissement — deux lignes peuvent designer le
+    /// meme objet sous deux identifiants differents : l'une vient d'un import
+    /// ancien, l'autre d'un import recent. L'envoi echouait alors en 23505.
+    /// En visant la cle logique, la ligne existante est mise a jour.
+    func bulkUpsert(tableName: String, onConflict: String? = nil, rows: [[String: Any]]) async {
         guard !rows.isEmpty else { return }
         let chunkSize = 250
 
+        let suffixe = onConflict.map { "?on_conflict=\($0)" } ?? ""
+
         for start in stride(from: 0, to: rows.count, by: chunkSize) {
             let chunk = Array(rows[start..<min(start + chunkSize, rows.count)])
-            var request = URLRequest(url: URL(string: "\(baseURL)/rest/v1/\(tableName)")!)
+            var request = URLRequest(url: URL(string: "\(baseURL)/rest/v1/\(tableName)\(suffixe)")!)
             request.httpMethod = "POST"
             request.setValue("return=minimal,resolution=merge-duplicates",
                              forHTTPHeaderField: "Prefer")
@@ -982,6 +994,7 @@ class SupabaseSync {
         print("\n📤 ÉTAPE 1: Envoi données locales → Supabase")
         await dedupeBalanceAccounts(from: container)
         await dedupeSoldesIntermediaires(from: container)
+        await dedupeDsnAssiettes(from: container)
         await syncDossiers(from: container)
         await syncExercices(from: container)
         await syncBalanceAccounts(from: container)

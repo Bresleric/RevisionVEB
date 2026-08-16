@@ -106,6 +106,7 @@ extension SupabaseSync {
     private func push<T>(_ table: String,
                          _ rows: [T],
                          label: String,
+                         onConflict: String? = nil,
                          id: (T) -> UUID,
                          payload: (T) -> [String: Any]) async {
         guard !rows.isEmpty else { return }
@@ -116,8 +117,25 @@ extension SupabaseSync {
             batch.append(payload(row))
         }
 
+        // Un lot ne doit jamais viser deux fois la meme cle de conflit : Postgres
+        // rejette alors le lot entier (21000). Le dedoublonnage par identifiant
+        // ci-dessus n'y suffit pas, deux identifiants pouvant designer le meme
+        // objet. Filet de securite : le local est cense etre deja propre.
+        if let onConflict {
+            let colonnes = onConflict.split(separator: ",").map(String.init)
+            var clesVues = Set<String>()
+            let avant = batch.count
+            batch = batch.filter { ligne in
+                let cle = colonnes.map { "\(ligne[$0] ?? "")" }.joined(separator: "|")
+                return clesVues.insert(cle).inserted
+            }
+            if avant != batch.count {
+                print("  ⚠️ \(label): \(avant - batch.count) ligne(s) en double sur la clé logique, ignorée(s)")
+            }
+        }
+
         print("📤 \(label): \(batch.count)")
-        await bulkUpsert(tableName: table, rows: batch)
+        await bulkUpsert(tableName: table, onConflict: onConflict, rows: batch)
     }
 
     /// Lecture generique d'une table Supabase.
@@ -229,6 +247,45 @@ extension SupabaseSync {
         }
     }
 
+
+    /// Ne conserve qu'une assiette DSN par (exercice, mois, annee, etablissement).
+    ///
+    /// Les premieres DSN ont ete importees avec un identifiant tire au hasard,
+    /// les suivantes avec un identifiant derive du mois et de l'etablissement.
+    /// Un meme mois pouvait donc exister deux fois sous deux identifiants : le
+    /// lot d'envoi visait alors deux fois la meme ligne distante, et PostgreSQL
+    /// refusait l'ensemble.
+    ///
+    /// Regle de conservation : l'extraction la plus recente.
+    func dedupeDsnAssiettes(from container: ModelContainer) async {
+        let context = ModelContext(container)
+        guard let assiettes = try? context.fetch(FetchDescriptor<DsnAssiette>()) else { return }
+
+        var best: [String: DsnAssiette] = [:]
+        var doomed: [DsnAssiette] = []
+
+        for assiette in assiettes {
+            let key = "\(assiette.exerciceID.pg)|\(assiette.annee)|\(assiette.mois)|\(assiette.etablissement)"
+            guard let current = best[key] else {
+                best[key] = assiette
+                continue
+            }
+            // A egalite de date, l'identifiant tranche : les deux Macs gardent
+            // ainsi la meme ligne.
+            let keepsNew = (assiette.dateExtraction, assiette.id.pg) > (current.dateExtraction, current.id.pg)
+            best[key] = keepsNew ? assiette : current
+            doomed.append(keepsNew ? current : assiette)
+        }
+
+        guard !doomed.isEmpty else { return }
+        for assiette in doomed { context.delete(assiette) }
+        do {
+            try context.save()
+            print("🧹 DSN: \(doomed.count) doublons supprimés localement")
+        } catch {
+            print("⚠️ Dédoublonnage DSN: \(error.localizedDescription)")
+        }
+    }
 
     // MARK: - Envoi (local → Supabase)
 
@@ -414,7 +471,8 @@ extension SupabaseSync {
         }
 
         // DSN Assiettes (Cycle H)
-        await push("dsn_assiettes", all(DsnAssiette.self), label: "DSN Assiettes", id: { $0.id }) { d in
+        await push("dsn_assiettes", all(DsnAssiette.self), label: "DSN Assiettes",
+                   onConflict: "exercice_id,mois,annee,etablissement", id: { $0.id }) { d in
             [
                 "id": d.id.pg,
                 "exercice_id": d.exerciceID.pg,
