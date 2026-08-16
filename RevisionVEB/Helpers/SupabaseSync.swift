@@ -992,6 +992,7 @@ class SupabaseSync {
 
         // ÉTAPE 1: ENVOYER les données locales vers Supabase (d'abord!)
         print("\n📤 ÉTAPE 1: Envoi données locales → Supabase")
+        await dedupeDossiers(from: container)
         await dedupeBalanceAccounts(from: container)
         await dedupeSoldesIntermediaires(from: container)
         await dedupeDsnAssiettes(from: container)

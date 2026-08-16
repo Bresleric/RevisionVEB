@@ -280,6 +280,57 @@ extension SupabaseSync {
     }
 
 
+    /// Supprime les dossiers homonymes qui ne portent aucun exercice.
+    ///
+    /// Un Mac demarrant sur une base vide creait ses propres dossiers avec des
+    /// identifiants aleatoires. La synchronisation les additionnait a ceux de
+    /// l'autre machine au lieu de les reconnaitre : le dossier apparaissait deux
+    /// fois dans la liste, dont un exemplaire vide.
+    ///
+    /// Prudence : on ne supprime QUE les exemplaires sans aucun exercice. Si les
+    /// deux portent du travail, on ne touche a rien et on le signale — une
+    /// fusion demande de repointer les exercices, ce qui ne doit pas se faire
+    /// sans decision explicite.
+    func dedupeDossiers(from container: ModelContainer) async {
+        let context = ModelContext(container)
+        guard let dossiers = try? context.fetch(FetchDescriptor<Dossier>()), dossiers.count > 1 else { return }
+        let exercices = (try? context.fetch(FetchDescriptor<Exercice>())) ?? []
+        let charge = Dictionary(grouping: exercices, by: { $0.dossierID }).mapValues { $0.count }
+
+        var doomed: [Dossier] = []
+
+        for (nom, exemplaires) in Dictionary(grouping: dossiers, by: { $0.nom }) where exemplaires.count > 1 {
+            let pleins = exemplaires.filter { (charge[$0.id] ?? 0) > 0 }
+            let vides = exemplaires.filter { (charge[$0.id] ?? 0) == 0 }
+
+            if pleins.count > 1 {
+                let detail = pleins.map { "\($0.id.pg.prefix(8)) (\(charge[$0.id] ?? 0) exercices)" }
+                    .joined(separator: ", ")
+                print("⚠️ Dossier « \(nom) » en double, les deux portent des exercices : \(detail)")
+                print("   Aucune suppression automatique : les exercices doivent être repointés à la main.")
+                continue
+            }
+
+            // Aucun exemplaire charge : on garde le plus ancien identifiant, pour
+            // que les deux Macs retiennent le meme.
+            let survivants = pleins.isEmpty ? [vides.min { $0.id.pg < $1.id.pg }].compactMap { $0 } : pleins
+            doomed += exemplaires.filter { d in !survivants.contains { $0.id == d.id } }
+        }
+
+        guard !doomed.isEmpty else { return }
+        for dossier in doomed {
+            print("🧹 Dossier vide supprimé : \(dossier.nom) (\(dossier.id.pg.prefix(8)))")
+            await deleteRemote(table: "dossiers", id: dossier.id)
+            context.delete(dossier)
+        }
+        do {
+            try context.save()
+            print("🧹 Dossiers: \(doomed.count) doublon(s) vide(s) supprimé(s)")
+        } catch {
+            print("⚠️ Dédoublonnage dossiers: \(error.localizedDescription)")
+        }
+    }
+
     /// Ne conserve qu'une assiette DSN par (exercice, mois, annee, etablissement).
     ///
     /// Les premieres DSN ont ete importees avec un identifiant tire au hasard,

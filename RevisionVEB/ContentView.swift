@@ -38,10 +38,21 @@ struct RootView: View {
         .onAppear(perform: seedIfNeeded)
     }
 
+    /// Cree les deux dossiers de depart, avec un identifiant derive de leur nom.
+    ///
+    /// Avec un identifiant tire au hasard, chaque Mac demarrant sur une base
+    /// vide fabriquait ses propres dossiers, sans rapport avec ceux de l'autre :
+    /// la synchronisation les additionnait au lieu de les reconnaitre, et le
+    /// dossier apparaissait en double avec ses exercices repartis entre les
+    /// deux. Un identifiant derive du nom fait que les deux machines produisent
+    /// exactement le meme.
     private func seedIfNeeded() {
         guard dossiers.isEmpty else { return }
-        modelContext.insert(Dossier(nom: "PLANB SARL", ordre: 0))
-        modelContext.insert(Dossier(nom: "Moulin Neuf SARL", ordre: 1))
+        for (ordre, nom) in ["PLANB SARL", "Moulin Neuf SARL"].enumerated() {
+            modelContext.insert(Dossier(id: SupabaseSync.stableID("dossier", nom),
+                                        nom: nom,
+                                        ordre: ordre))
+        }
         try? modelContext.save()
 
         // Corriger les déclarations TVA 2026 importées avec le mauvais exerciceID
@@ -2015,6 +2026,10 @@ enum SigCalculator {
 
         print(String(format: "📊 Frais de personnel : N = %.2f | N-1 = %.2f | %d comptes 64x",
                      vars.fraisPersonnel, varsN1.fraisPersonnel, comptes64.count))
+
+        // Le detail compte par compte n'est imprime qu'en cas de doublon : c'est
+        // alors le seul moyen de confronter la balance importee a celle du
+        // logiciel comptable. En temps normal il noierait la console.
 
         if !doublons64.isEmpty {
             print("⚠️ SIG : \(doublons64.count) compte(s) 64x en double dans la base — le total N est faussé")
