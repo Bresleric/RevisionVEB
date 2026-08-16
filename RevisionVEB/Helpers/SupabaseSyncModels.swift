@@ -237,11 +237,39 @@ extension SupabaseSync {
             doomed.append(keepsNew ? current : account)
         }
 
-        guard !doomed.isEmpty else { return }
-        for account in doomed { context.delete(account) }
+        // Une balance est un instantane : deux imports du meme exercice ne se
+        // melangent pas. On ne garde donc que les comptes du dernier import.
+        //
+        // Sans cette regle, un compte solde depuis, disparu du nouvel export
+        // comptable, survivait sur le Mac qui n'avait pas reimporte — et comme
+        // la synchronisation pousse avant de charger, il le renvoyait sur
+        // Supabase avant meme de recevoir la version nettoyee. Les soldes
+        // intermediaires redevenaient faux sur les deux machines.
+        //
+        // La fenetre de tolerance absorbe le fait que chaque compte porte son
+        // propre horodatage, a quelques millisecondes pres, alors qu'ils
+        // proviennent tous du meme import.
+        let fenetre: TimeInterval = 5 * 60
+        var perimes: [BalanceAccount] = []
+
+        for (_, comptes) in Dictionary(grouping: best.values, by: { $0.exerciceID }) {
+            guard let dernier = comptes.map({ $0.importDate }).max() else { continue }
+            let obsoletes = comptes.filter { $0.importDate < dernier.addingTimeInterval(-fenetre) }
+            guard !obsoletes.isEmpty else { continue }
+
+            let numeros = obsoletes.map { $0.accountNumber }.sorted().joined(separator: ", ")
+            print("🧹 Balance: \(obsoletes.count) compte(s) d'un import précédent écarté(s) : \(numeros)")
+            perimes += obsoletes
+        }
+
+        let aSupprimer = doomed + perimes
+        guard !aSupprimer.isEmpty else { return }
+        for account in aSupprimer { context.delete(account) }
         do {
             try context.save()
-            print("🧹 Balance: \(doomed.count) doublons supprimés localement")
+            if !doomed.isEmpty {
+                print("🧹 Balance: \(doomed.count) doublons supprimés localement")
+            }
         } catch {
             print("⚠️ Dédoublonnage balance: \(error.localizedDescription)")
         }

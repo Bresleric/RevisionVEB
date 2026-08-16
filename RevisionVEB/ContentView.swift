@@ -3166,6 +3166,24 @@ struct ImmoInvoicesView: View {
                         modelContext.insert(ImmoInvoice(exerciceID: exerciceID, ordre: invoices.count))
                         try? modelContext.save()
                     } label: { Label("Ajouter une facture", systemImage: "plus.circle") }
+
+                    // Depart au conflit entre deux Macs.
+                    //
+                    // L'arbitrage se fait sur la date de derniere modification.
+                    // Quand aucune des deux versions n'a ete retouchee depuis la
+                    // migration, leurs horodatages se valent et personne ne
+                    // l'emporte : les listes restent divergentes. Ce bouton dit
+                    // explicitement laquelle fait foi.
+                    Button {
+                        for inv in invoices { inv.touch() }
+                        try? modelContext.save()
+                        print("📌 Factures immo : \(invoices.count) ligne(s) marquée(s) comme référence")
+                    } label: {
+                        Label("Faire de cette liste la référence", systemImage: "checkmark.seal")
+                    }
+                    .help("Marque ces lignes comme les plus récentes : à la prochaine synchronisation, elles remplaceront celles de l'autre Mac")
+                    .disabled(invoices.isEmpty)
+
                     Spacer()
                     Text("Total HT : \(formatEuro(total))").fontWeight(.semibold).monospacedDigit()
                 }
