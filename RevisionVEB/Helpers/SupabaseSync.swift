@@ -1035,6 +1035,17 @@ class SupabaseSync {
         // PHASE 1: Charger TOUT avec un SEUL context
         let context = ModelContext(container)
 
+        // Rechargement integral demande : on n'envoie RIEN. Cette machine
+        // abandonne son cache et adopte Supabase tel quel.
+        if Self.rechargementDemande {
+            print("\n♻️ Rechargement intégral demandé — aucun envoi, cette machine adopte Supabase")
+            await adopterVersionDistante(from: container)
+            Self.rechargementDemande = false
+            SyncDiagnostics.report()
+            print("\n✅ Synchronisation complétée!")
+            return
+        }
+
         // ÉTAPE 1: ENVOYER les données locales vers Supabase (d'abord!)
         print("\n📤 ÉTAPE 1: Envoi données locales → Supabase")
         await dedupeDossiers(from: container)
@@ -1237,6 +1248,20 @@ class SupabaseSync {
             print("❌ Erreur sauvegarde: \(error)")
         }
 
+    }
+
+    /// Demande de rechargement integral au prochain demarrage.
+    ///
+    /// La synchronisation demarre avec l'application et pousse avant de charger.
+    /// Une machine divergente reecrivait donc ses valeurs sur Supabase avant
+    /// qu'on ait pu cliquer quoi que ce soit : le rechargement rapatriait
+    /// ensuite ce qu'elle venait elle-meme d'y ecrire. Aucun bouton ne pouvait
+    /// gagner cette course — d'ou ce drapeau, lu avant tout envoi.
+    private static let cleRechargement = "rechargerDepuisSupabaseAuDemarrage"
+
+    static var rechargementDemande: Bool {
+        get { UserDefaults.standard.bool(forKey: cleRechargement) }
+        set { UserDefaults.standard.set(newValue, forKey: cleRechargement) }
     }
 
     /// Abandonne le cache local et le reconstruit entierement depuis Supabase.
