@@ -91,6 +91,51 @@ class SupabaseSync {
         }
     }
 
+    /// Supprime sur Supabase les comptes d'un exercice absents du dernier import.
+    ///
+    /// Reimporter une balance remplace les comptes locaux, mais laissait
+    /// intactes les lignes distantes. Un compte solde depuis, disparu du nouvel
+    /// export comptable, restait donc sur Supabase et redescendait au premier
+    /// chargement : les soldes intermediaires redevenaient faux apres chaque
+    /// synchronisation, sans que le reimport y change rien.
+    ///
+    /// N'est appelee qu'immediatement apres un import, seul moment ou le jeu
+    /// local fait autorite pour cet exercice.
+    func purgeBalanceAccountsAbsentes(exerciceID: UUID, conserves: Set<UUID>) async {
+        var distants: [UUID] = []
+        let taille = 1000
+        var offset = 0
+
+        while true {
+            let chemin = "\(baseURL)/rest/v1/balance_accounts"
+                + "?select=id&exercice_id=eq.\(exerciceID.pg)&limit=\(taille)&offset=\(offset)"
+            guard let url = URL(string: chemin) else { return }
+            do {
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let page = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+                else { return }
+
+                distants += page.compactMap { ($0["id"] as? String).flatMap(UUID.init(uuidString:)) }
+                if page.count < taille { break }
+                offset += taille
+            } catch {
+                print("⚠️ Purge balance: \(error.localizedDescription)")
+                return
+            }
+        }
+
+        let aSupprimer = distants.filter { !conserves.contains($0) }
+        guard !aSupprimer.isEmpty else { return }
+
+        for id in aSupprimer {
+            await deleteRemote(table: "balance_accounts", id: id)
+        }
+        print("🧹 Balance: \(aSupprimer.count) compte(s) obsolète(s) supprimé(s) sur Supabase")
+    }
+
     func syncBalanceAccounts(from container: ModelContainer) async {
         do {
             let context = ModelContext(container)

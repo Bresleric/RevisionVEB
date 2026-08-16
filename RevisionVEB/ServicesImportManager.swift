@@ -354,6 +354,18 @@ final class ImportManager: ObservableObject {
                 let accounts = try modelContext.fetch(descriptor).filter { $0.exerciceID == exerciceID }
                 SigCalculator.calculateAndStore(exerciceID: exerciceID, from: accounts, in: modelContext)
                 print("📊 SIG calculés automatiquement: \(accounts.count) comptes")
+
+                // Alignement de Supabase sur la balance qu'on vient d'importer.
+                //
+                // Sans cela, un compte disparu du nouvel export restait sur
+                // Supabase et redescendait a la synchronisation suivante : le
+                // reimport paraissait corriger les soldes intermediaires, puis
+                // ils redevenaient faux au redemarrage. C'est le seul moment ou
+                // le jeu local fait autorite pour cet exercice.
+                await SupabaseSync.shared.purgeBalanceAccountsAbsentes(
+                    exerciceID: exerciceID,
+                    conserves: Set(accounts.map { $0.id })
+                )
             } catch {
                 print("⚠️ Erreur lors du calcul des SIG: \(error)")
             }
