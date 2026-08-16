@@ -174,6 +174,15 @@ extension SupabaseSync {
     /// remplacees par la date de synchronisation.
     private func date(_ any: Any?) -> Date? { Self.parseDate(any) }
 
+    /// Horodatage lisible pour les messages de diagnostic.
+    static func horodatage(_ d: Date) -> String {
+        guard d > .distantPast else { return "jamais modifiée" }
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "fr_FR")
+        f.dateFormat = "dd/MM HH:mm:ss"
+        return f.string(from: d)
+    }
+
     static func parseDate(_ any: Any?) -> Date? {
         guard let texte = (any as? String)?.trimmingCharacters(in: .whitespaces),
               !texte.isEmpty else { return nil }
@@ -965,7 +974,15 @@ extension SupabaseSync {
             if let local = byID[id] {
                 // La version locale est plus recente : elle repartira au
                 // prochain envoi, on ne la remplace pas.
-                guard distante > local.updatedAt else { continue }
+                guard distante > local.updatedAt else {
+                    if abs(local.montant - dbl(r["montant"])) > 0.005 {
+                        print(String(format: "  ↔️ Facture immo divergente conservée en local : %@ %.2f (local, %@) contre %.2f (distant, %@)",
+                                     local.designation.isEmpty ? local.compte : local.designation,
+                                     local.montant, Self.horodatage(local.updatedAt),
+                                     dbl(r["montant"]), Self.horodatage(distante)))
+                    }
+                    continue
+                }
                 target = local
                 merged += 1
             } else {

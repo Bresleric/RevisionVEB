@@ -568,7 +568,14 @@ final class ImmoInvoice {
     /// Sans elle, chaque machine ecrasait la version de l'autre a chaque
     /// synchronisation : la derniere a se synchroniser gagnait, sans qu'aucune
     /// ne sache laquelle portait la saisie la plus recente.
-    var updatedAt: Date = Date()
+    ///
+    /// La valeur par defaut est volontairement `distantPast` et non `Date()` :
+    /// c'est elle qu'heritent les lignes existantes lors de la migration du
+    /// schema. Avec `Date()`, une ligne jamais retouchee se pretendait
+    /// fraichement modifiee — les deux Macs se declaraient tous deux les plus
+    /// recents et aucun ne cedait. Une ligne qui n'a jamais ete editee ne doit
+    /// revendiquer aucune autorite.
+    var updatedAt: Date = Date.distantPast
 
     init(id: UUID = UUID(), exerciceID: UUID, date: Date = Date(), compte: String = "",
          designation: String = "", montant: Double = 0, ordre: Int = 0) {
