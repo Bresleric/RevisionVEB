@@ -216,15 +216,14 @@ struct SidebarView: View {
             }
 
             Section {
+                // L'envoi vers Supabase est pris en charge par le delegue de
+                // l'application, qui retient la fermeture le temps qu'il faut.
+                // Ce bouton se contente donc d'enregistrer le contexte puis de
+                // demander la fermeture — auparavant il annonçait une
+                // « synchronisation » qu'il ne faisait pas.
                 Button(role: .destructive) {
-                    Task {
-                        print("💾 Synchronisation avant fermeture...")
-                        try? modelContext.save()
-                        print("✅ Données sauvegardées")
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                            NSApplication.shared.terminate(nil)
-                        }
-                    }
+                    try? modelContext.save()
+                    NSApplication.shared.terminate(nil)
                 } label: {
                     Label("Quitter l'application", systemImage: "door.left.hand.open")
                 }

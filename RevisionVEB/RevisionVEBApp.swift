@@ -7,9 +7,34 @@
 
 import SwiftUI
 import SwiftData
+import AppKit
+
+/// Retient la fermeture de l'application le temps d'envoyer les modifications.
+///
+/// La synchronisation ne s'executait qu'a l'ouverture : une saisie suivie d'un
+/// simple ⌘Q ne quittait jamais la machine, et l'utilisateur croyait
+/// legitimement avoir synchronise. macOS n'accorde qu'un delai bref a une
+/// application qui se ferme — d'ou `terminateLater`, qui suspend la fermeture
+/// jusqu'a `reply(toApplicationShouldTerminate:)`, et le delai borne cote
+/// `envoiFinal` pour qu'une panne reseau ne bloque jamais la fermeture.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Renseigne au demarrage par la scene principale.
+    @MainActor static var container: ModelContainer?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let container = AppDelegate.container else { return .terminateNow }
+
+        Task { @MainActor in
+            await SupabaseSync.shared.envoiFinal(from: container)
+            NSApp.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+}
 
 @main
 struct RevisionVEBApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     var sharedModelContainer: ModelContainer = {
         // Instantané de sécurité de la base existante AVANT toute migration.
         DataBackup.autoBackup()
@@ -93,10 +118,20 @@ struct RevisionVEBApp: App {
         WindowGroup {
             RootView()
                 .onAppear {
+                    // Le delegue en a besoin pour envoyer a la fermeture.
+                    AppDelegate.container = sharedModelContainer
                     Task {
                         print("🔄 Synchronisation Supabase (sans perdre les justifications)")
                         await SupabaseSync.shared.fullSync(from: sharedModelContainer)
                         print("✅ Synchronisation réussie")
+
+                        // Filet contre le plantage, l'arret force et la coupure :
+                        // dans ces cas l'envoi a la fermeture ne s'execute pas.
+                        // La perte est ainsi bornee a dix minutes de travail.
+                        while !Task.isCancelled {
+                            try? await Task.sleep(for: .seconds(600))
+                            await SupabaseSync.shared.envoiPeriodique(from: sharedModelContainer)
+                        }
                     }
                 }
         }

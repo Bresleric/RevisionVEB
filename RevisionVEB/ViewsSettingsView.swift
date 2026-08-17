@@ -19,6 +19,8 @@ struct SettingsView: View {
     @State private var showingDemoDataAlert = false
     @State private var showingAdoptAlert = false
     @State private var adoptionEnCours = false
+    @State private var syncEnCours = false
+    @State private var derniereSync: Date?
     
     var body: some View {
         ScrollView {
@@ -153,6 +155,36 @@ struct SettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         
+                        Divider()
+
+                        // La synchronisation ne tourne qu'au demarrage : sans ce
+                        // bouton, une saisie ne quitte la machine qu'au lancement
+                        // suivant, et on croit avoir synchronise alors que rien
+                        // n'est parti.
+                        Button {
+                            syncEnCours = true
+                            Task {
+                                await SupabaseSync.shared.fullSync(from: modelContext.container, force: true)
+                                derniereSync = Date()
+                                syncEnCours = false
+                            }
+                        } label: {
+                            Label(syncEnCours ? "Synchronisation en cours…" : "Synchroniser maintenant",
+                                  systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(syncEnCours)
+
+                        if let d = derniereSync {
+                            Text("Dernière synchronisation manuelle : \(d.formatted(date: .omitted, time: .standard))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("Envoie tes saisies et récupère celles de l'autre Mac. À faire avant de quitter, sinon ton travail ne part qu'au prochain démarrage.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
                         Divider()
 
                         // Sortie de secours quand deux Macs ont divergé : plutôt

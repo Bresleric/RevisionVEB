@@ -1014,10 +1014,110 @@ class SupabaseSync {
         }
     }
 
+    // MARK: - Envoi
+
+    /// Envoi complet du local vers Supabase, sans rien charger en retour.
+    ///
+    /// `avecNettoyage` declenche les dedoublonnages, qui suppriment des lignes
+    /// ici et sur Supabase. C'est justifie au demarrage et apres un chargement,
+    /// ou l'on vient de decouvrir l'etat distant. Ça ne l'est pas pour un envoi
+    /// periodique : faire tourner une logique destructive en tache de fond,
+    /// toutes les dix minutes, sans que personne ne regarde, est un risque
+    /// gratuit.
+    private func pousserTout(from container: ModelContainer, avecNettoyage: Bool = true) async {
+        if avecNettoyage {
+            await dedupeDossiers(from: container)
+            await dedupeBalanceAccounts(from: container)
+            await dedupeSoldesIntermediaires(from: container)
+            await dedupeDsnAssiettes(from: container)
+        }
+        await syncDossiers(from: container)
+        await syncExercices(from: container)
+        await syncBalanceAccounts(from: container)
+        await syncSoldesIntermediales(from: container)
+        await syncImmoAssets(from: container)
+        await syncPendingItems(from: container)
+        await syncAuditWork(from: container)
+        await syncJustificatifs(from: container)
+    }
+
+    /// Envoi periodique, en tache de fond pendant la session.
+    ///
+    /// L'envoi a la fermeture ne couvre pas le plantage, l'arret force ni la
+    /// coupure de courant : dans ces cas le gestionnaire de fermeture ne
+    /// s'execute jamais. Un envoi regulier borne la perte a l'intervalle.
+    ///
+    /// N'envoie que : charger en pleine session ecraserait les saisies en cours
+    /// par la version distante, ce qui serait pire que le mal.
+    func envoiPeriodique(from container: ModelContainer) async {
+        if Self.rechargementDemande { return }
+        guard !isSyncing else { return }
+        isSyncing = true
+        defer { isSyncing = false }
+
+        print("\n⏱️ — Envoi périodique —")
+        SyncDiagnostics.reset()
+        await pousserTout(from: container, avecNettoyage: false)
+        SyncDiagnostics.report()
+        print("⏱️ — Envoi périodique terminé —\n")
+    }
+
+    /// Envoi declenche a la fermeture de l'application.
+    ///
+    /// La synchronisation ne tournait qu'a l'ouverture : une saisie faite puis
+    /// suivie d'un simple ⌘Q ne quittait jamais la machine. On envoie donc a la
+    /// fermeture — mais l'envoi seul, sans chargement : recuperer les donnees
+    /// de l'autre Mac au moment de partir n'a aucun interet, et doublerait le
+    /// temps pendant lequel on retient la fermeture.
+    ///
+    /// Le delai borne l'attente : au-dela, on rend la main et ce qui n'est pas
+    /// parti le sera au prochain demarrage. Mieux vaut une fermeture qui aboutit
+    /// qu'une application qui refuse de se fermer.
+    func envoiFinal(from container: ModelContainer, delai: TimeInterval = 20) async {
+        // Un rechargement integral est programme : cette machine s'apprete a
+        // abandonner son cache. L'envoyer maintenant reintroduirait sur Supabase
+        // exactement ce qu'on veut abandonner.
+        if Self.rechargementDemande {
+            print("⏭️ Fermeture : rechargement programmé, aucun envoi")
+            return
+        }
+
+        guard !isSyncing else {
+            print("⏭️ Fermeture : synchronisation déjà en cours")
+            return
+        }
+        isSyncing = true
+        defer { isSyncing = false }
+
+        print("\n📤 Fermeture : envoi des modifications vers Supabase")
+        SyncDiagnostics.reset()
+
+        await withTaskGroup(of: Void.self) { groupe in
+            groupe.addTask { await self.pousserTout(from: container) }
+            groupe.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(delai * 1_000_000_000))
+                print("⏱️ Fermeture : délai de \(Int(delai)) s atteint, le reste partira au prochain démarrage")
+            }
+            await groupe.next()
+            groupe.cancelAll()
+        }
+
+        SyncDiagnostics.report()
+        print("📤 Fermeture : envoi terminé")
+    }
+
     // MARK: - Full Sync
 
-    func fullSync(from container: ModelContainer) async {
-        guard !hasFullSyncedThisSession else {
+    /// `force` relance une synchronisation deja faite dans la session.
+    ///
+    /// Sans elle, les saisies ne quittaient la machine qu'au demarrage suivant :
+    /// la synchronisation ne s'execute qu'a l'ouverture de l'application, et
+    /// rien ne part a la fermeture. Un utilisateur qui saisit puis quitte
+    /// croyait legitimement avoir synchronise, alors que son travail restait
+    /// local — et le cas etait pire encore apres un rechargement integral, qui
+    /// consomme le lancement sans rien envoyer.
+    func fullSync(from container: ModelContainer, force: Bool = false) async {
+        guard force || !hasFullSyncedThisSession else {
             print("⏳ Synchronisation déjà effectuée cette session, appel ignoré")
             return
         }
@@ -1048,18 +1148,7 @@ class SupabaseSync {
 
         // ÉTAPE 1: ENVOYER les données locales vers Supabase (d'abord!)
         print("\n📤 ÉTAPE 1: Envoi données locales → Supabase")
-        await dedupeDossiers(from: container)
-        await dedupeBalanceAccounts(from: container)
-        await dedupeSoldesIntermediaires(from: container)
-        await dedupeDsnAssiettes(from: container)
-        await syncDossiers(from: container)
-        await syncExercices(from: container)
-        await syncBalanceAccounts(from: container)
-        await syncSoldesIntermediales(from: container)
-        await syncImmoAssets(from: container)
-        await syncPendingItems(from: container)
-        await syncAuditWork(from: container)
-        await syncJustificatifs(from: container)
+        await pousserTout(from: container)
 
         // ÉTAPE 2: CHARGER depuis Supabase (pour les autres Macs)
         print("\n📥 ÉTAPE 2: Chargement Supabase → local")

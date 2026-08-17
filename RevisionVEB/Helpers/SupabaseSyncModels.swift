@@ -562,6 +562,16 @@ extension SupabaseSync {
         }
 
         // Factures d'investissement (id propre)
+        // Diagnostic cible : identifiants et montants reellement envoyes.
+        // A confronter avec ce que contient la table cote Supabase.
+        for f in all(ImmoInvoice.self).sorted(by: { $0.ordre < $1.ordre }) {
+            print(String(format: "   📤 immo %@ | %@ | %10.2f | maj %@",
+                         f.id.pg.prefix(8) as NSString,
+                         (f.designation.isEmpty ? f.compte : f.designation).prefix(28) as NSString,
+                         f.montant,
+                         Self.horodatage(f.updatedAt)))
+        }
+
         await push("immo_invoices", all(ImmoInvoice.self), label: "Factures immo", id: { $0.id }) { f in
             [
                 "id": f.id.pg,
