@@ -103,19 +103,42 @@ extension SupabaseSync {
     /// `id` sert a dedoublonner avant l'envoi : deux enregistrements locaux
     /// partageant la meme cle logique produiraient la meme ligne, et PostgREST
     /// refuse un lot qui vise deux fois la meme clef primaire.
+    /// `horodatage` fait respecter a l'envoi la meme regle qu'au chargement.
+    ///
+    /// L'envoi ecrasait sans condition : la derniere machine a demarrer
+    /// imposait ses valeurs, meme plus anciennes que celles deja sur Supabase.
+    /// L'arbitrage par date de modification n'existait qu'a la lecture, si bien
+    /// qu'un Mac au repos annulait le travail de l'autre en s'ouvrant. Quand ce
+    /// bloc est fourni, une ligne plus recente sur Supabase n'est pas ecrasee :
+    /// elle sera adoptee au chargement qui suit.
     private func push<T>(_ table: String,
                          _ rows: [T],
                          label: String,
                          onConflict: String? = nil,
+                         horodatage: ((T) -> Date)? = nil,
                          id: (T) -> UUID,
                          payload: (T) -> [String: Any]) async {
         guard !rows.isEmpty else { return }
 
         var seen = Set<UUID>()
-        var batch: [[String: Any]] = []
+        var retenues: [(id: UUID, date: Date, payload: [String: Any])] = []
         for row in rows where seen.insert(id(row)).inserted {
-            batch.append(payload(row))
+            retenues.append((id(row), horodatage?(row) ?? .distantPast, payload(row)))
         }
+
+        if horodatage != nil {
+            let distants = await horodatagesDistants(table)
+            let avant = retenues.count
+            retenues = retenues.filter { ligne in
+                guard let distant = distants[ligne.id] else { return true }
+                return ligne.date >= distant
+            }
+            if avant != retenues.count {
+                print("  ⏭️ \(label): \(avant - retenues.count) ligne(s) plus récente(s) sur Supabase, conservée(s)")
+            }
+        }
+
+        var batch = retenues.map { $0.payload }
 
         // Un lot ne doit jamais viser deux fois la meme cle de conflit : Postgres
         // rejette alors le lot entier (21000). Le dedoublonnage par identifiant
@@ -136,6 +159,39 @@ extension SupabaseSync {
 
         print("📤 \(label): \(batch.count)")
         await bulkUpsert(tableName: table, onConflict: onConflict, rows: batch)
+    }
+
+    /// Dates de derniere modification presentes sur Supabase, par identifiant.
+    ///
+    /// Sert a ne pas ecraser une ligne plus recente que la notre. Une table sans
+    /// colonne `updated_at` renvoie un dictionnaire vide : rien n'est alors
+    /// filtre, le comportement reste celui d'avant.
+    private func horodatagesDistants(_ table: String) async -> [UUID: Date] {
+        var resultat: [UUID: Date] = [:]
+        let taille = 1000
+        var offset = 0
+
+        while true {
+            let chemin = "\(baseURL)/rest/v1/\(table)?select=id,updated_at&limit=\(taille)&offset=\(offset)"
+            guard let url = URL(string: chemin) else { return resultat }
+            do {
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let page = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+                else { return resultat }
+
+                for ligne in page {
+                    guard let id = uuid(ligne["id"]), let d = date(ligne["updated_at"]) else { continue }
+                    resultat[id] = d
+                }
+                if page.count < taille { return resultat }
+                offset += taille
+            } catch {
+                return resultat
+            }
+        }
     }
 
     /// Lecture generique d'une table Supabase.
@@ -572,7 +628,8 @@ extension SupabaseSync {
                          Self.horodatage(f.updatedAt)))
         }
 
-        await push("immo_invoices", all(ImmoInvoice.self), label: "Factures immo", id: { $0.id }) { f in
+        await push("immo_invoices", all(ImmoInvoice.self), label: "Factures immo",
+                   horodatage: { $0.updatedAt }, id: { $0.id }) { f in
             [
                 "id": f.id.pg,
                 "exercice_id": f.exerciceID.pg,

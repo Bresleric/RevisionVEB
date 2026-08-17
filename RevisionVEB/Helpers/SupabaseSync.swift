@@ -1073,7 +1073,10 @@ class SupabaseSync {
     /// Le delai borne l'attente : au-dela, on rend la main et ce qui n'est pas
     /// parti le sera au prochain demarrage. Mieux vaut une fermeture qui aboutit
     /// qu'une application qui refuse de se fermer.
-    func envoiFinal(from container: ModelContainer, delai: TimeInterval = 20) async {
+    /// Le delai est genereux car l'envoi comprend l'inventaire des pieces
+    /// justificatives sur le bucket, qui prend a lui seul une dizaine de
+    /// secondes. Vingt secondes coupaient systematiquement l'envoi en cours.
+    func envoiFinal(from container: ModelContainer, delai: TimeInterval = 45) async {
         // Un rechargement integral est programme : cette machine s'apprete a
         // abandonner son cache. L'envoyer maintenant reintroduirait sur Supabase
         // exactement ce qu'on veut abandonner.
