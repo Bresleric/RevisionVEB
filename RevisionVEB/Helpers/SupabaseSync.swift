@@ -1024,7 +1024,14 @@ class SupabaseSync {
     /// periodique : faire tourner une logique destructive en tache de fond,
     /// toutes les dix minutes, sans que personne ne regarde, est un risque
     /// gratuit.
-    private func pousserTout(from container: ModelContainer, avecNettoyage: Bool = true) async {
+    /// `avecPieces` declenche l'inventaire des pieces justificatives sur le
+    /// bucket. Il prend une dizaine de secondes pour une quarantaine de
+    /// fichiers, et n'a pas sa place a la fermeture : chaque piece est deja
+    /// versee au moment ou elle est rattachee. Le rattrapage se fait au
+    /// demarrage et a l'envoi periodique.
+    private func pousserTout(from container: ModelContainer,
+                             avecNettoyage: Bool = true,
+                             avecPieces: Bool = true) async {
         if avecNettoyage {
             await dedupeDossiers(from: container)
             await dedupeBalanceAccounts(from: container)
@@ -1038,7 +1045,9 @@ class SupabaseSync {
         await syncImmoAssets(from: container)
         await syncPendingItems(from: container)
         await syncAuditWork(from: container)
-        await syncJustificatifs(from: container)
+        if avecPieces {
+            await syncJustificatifs(from: container)
+        }
     }
 
     /// Envoi periodique, en tache de fond pendant la session.
@@ -1096,7 +1105,7 @@ class SupabaseSync {
         SyncDiagnostics.reset()
 
         await withTaskGroup(of: Void.self) { groupe in
-            groupe.addTask { await self.pousserTout(from: container) }
+            groupe.addTask { await self.pousserTout(from: container, avecPieces: false) }
             groupe.addTask {
                 try? await Task.sleep(nanoseconds: UInt64(delai * 1_000_000_000))
                 print("⏱️ Fermeture : délai de \(Int(delai)) s atteint, le reste partira au prochain démarrage")
