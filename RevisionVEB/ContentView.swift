@@ -1520,12 +1520,14 @@ private struct ReconciliationCard: View {
             // Elements de rapprochement
             Text("Éléments de rapprochement").font(.subheadline).fontWeight(.medium)
             ForEach(items) { item in
+                // Chaque saisie horodate la ligne : sans cela elle serait
+                // perpetuellement perdante face a l'autre Mac.
                 ReconItemRow(item: item,
-                             onCommit: { try? modelContext.save() },
+                             onCommit: { item.touch(); try? modelContext.save() },
                              onDelete: { removeItemDoc(item); modelContext.delete(item); try? modelContext.save() },
                              onLink: { pendingItem = item; showItemImporter = true },
                              onOpen: { openJustificationDocument(path: item.docPath, bookmark: item.docBookmark) },
-                             onRemoveDoc: { removeItemDoc(item); try? modelContext.save() })
+                             onRemoveDoc: { removeItemDoc(item); item.touch(); try? modelContext.save() })
             }
             Button {
                 modelContext.insert(ReconItem(exerciceID: exerciceID, accountNumber: account.accountNumber,
@@ -1570,6 +1572,7 @@ private struct ReconciliationCard: View {
         item.docPath = copied.path
         item.docName = copied.name
         item.docBookmark = nil
+        item.touch()
         uploadJustificatif(path: copied.path)
         try? modelContext.save()
     }
@@ -2554,8 +2557,18 @@ struct TvaControlView: View {
                 modelContext.delete(p)
             }
             for (i, line) in res.lines.enumerated() {
-                modelContext.insert(Ca3Entry(exerciceID: exerciceID, periode: res.periode,
-                                             taux: line.taux, base: line.base, tva: line.taxe, ordre: i))
+                // Identifiant derive de (exercice, periode, taux) et non tire au
+                // hasard. Une declaration ne porte qu'une ligne par taux : la
+                // cle est donc naturelle. Avec un identifiant neuf a chaque
+                // import, les lignes supprimees ici survivaient sur Supabase et
+                // redescendaient au chargement suivant — la periode etait alors
+                // comptee deux fois, base et TVA comprises.
+                let item = Ca3Entry(
+                    id: SupabaseSync.stableID(exerciceID.uuidString, res.periode, line.taux),
+                    exerciceID: exerciceID, periode: res.periode,
+                    taux: line.taux, base: line.base, tva: line.taxe, ordre: i
+                )
+                modelContext.insert(item)
             }
             // La déclaration est conservée dans le conteneur de l'app : c'est la
             // pièce justificative de la période, attendue dans l'export.
@@ -3885,11 +3898,11 @@ struct AccountDetailSheet: View {
                             ReconItemVentileRow(
                                 item: item,
                                 comptesCharge: comptesCharge,
-                                onCommit: { sauver() },
+                                onCommit: { item.touch(); sauver() },
                                 onDelete: { retirerPiece(item); modelContext.delete(item); sauver() },
                                 onLink: { itemALier = item; importEnLot = false; showImporter = true },
                                 onOpen: { openJustificationDocument(path: item.docPath, bookmark: item.docBookmark) },
-                                onRemoveDoc: { retirerPiece(item); sauver() }
+                                onRemoveDoc: { retirerPiece(item); item.touch(); sauver() }
                             )
                         }
 
@@ -3925,11 +3938,11 @@ struct AccountDetailSheet: View {
                         ForEach(items) { item in
                             ReconItemRow(
                                 item: item,
-                                onCommit: { sauver() },
+                                onCommit: { item.touch(); sauver() },
                                 onDelete: { retirerPiece(item); modelContext.delete(item); sauver() },
                                 onLink: { itemALier = item; importEnLot = false; showImporter = true },
                                 onOpen: { openJustificationDocument(path: item.docPath, bookmark: item.docBookmark) },
-                                onRemoveDoc: { retirerPiece(item); sauver() }
+                                onRemoveDoc: { retirerPiece(item); item.touch(); sauver() }
                             )
                         }
                     }
@@ -4054,6 +4067,7 @@ struct AccountDetailSheet: View {
         item.docPath = copie.path
         item.docName = copie.name
         item.docBookmark = nil
+        item.touch()
         uploadJustificatif(path: copie.path)
         if sauvegarder { sauver() }
     }

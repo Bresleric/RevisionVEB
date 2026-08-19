@@ -1037,6 +1037,7 @@ class SupabaseSync {
             await dedupeBalanceAccounts(from: container)
             await dedupeSoldesIntermediaires(from: container)
             await dedupeDsnAssiettes(from: container)
+            await dedupeCa3Entries(from: container)
         }
         await syncDossiers(from: container)
         await syncExercices(from: container)
@@ -1433,5 +1434,6 @@ class SupabaseSync {
     func nettoyageApresChargement(from container: ModelContainer) async {
         await dedupeBalanceAccounts(from: container)
         await dedupeDsnAssiettes(from: container)
+        await dedupeCa3Entries(from: container)
     }
 }

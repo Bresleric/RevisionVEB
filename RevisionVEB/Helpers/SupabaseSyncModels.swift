@@ -436,6 +436,47 @@ extension SupabaseSync {
         }
     }
 
+    /// Ne conserve qu'une ligne de declaration par (exercice, periode, taux).
+    ///
+    /// Une CA3 ne porte qu'une ligne par taux. Les exemplaires supplementaires
+    /// viennent d'identifiants tires au hasard a chaque import : la periode
+    /// etait alors comptee deux fois, base et TVA collectee comprises.
+    ///
+    /// Sans ce nettoyage, la machine qui porte encore les doublons les
+    /// repousserait a son demarrage — l'envoi precede le chargement.
+    func dedupeCa3Entries(from container: ModelContainer) async {
+        let context = ModelContext(container)
+        guard let lignes = try? context.fetch(FetchDescriptor<Ca3Entry>()) else { return }
+
+        var best: [String: Ca3Entry] = [:]
+        var doomed: [Ca3Entry] = []
+
+        for ligne in lignes {
+            let key = "\(ligne.exerciceID.pg)|\(ligne.periode)|\(ligne.taux)"
+            guard let courant = best[key] else { best[key] = ligne; continue }
+            // A defaut d'horodatage, l'identifiant tranche : les deux Macs
+            // retiennent ainsi la meme ligne.
+            let gardeNouvelle = ligne.id.pg > courant.id.pg
+            best[key] = gardeNouvelle ? ligne : courant
+            doomed.append(gardeNouvelle ? courant : ligne)
+        }
+
+        guard !doomed.isEmpty else { return }
+        let identifiants = doomed.map { $0.id }
+        for ligne in doomed { context.delete(ligne) }
+        do {
+            try context.save()
+            print("🧹 TVA: \(doomed.count) ligne(s) de déclaration en double supprimée(s)")
+        } catch {
+            print("⚠️ Dédoublonnage TVA: \(error.localizedDescription)")
+            return
+        }
+
+        for id in identifiants {
+            await deleteRemote(table: "ca3_entries", id: id)
+        }
+    }
+
     /// Ne conserve qu'une assiette DSN par (exercice, mois, annee, etablissement).
     ///
     /// Les premieres DSN ont ete importees avec un identifiant tire au hasard,
@@ -487,6 +528,7 @@ extension SupabaseSync {
 
         // Controles de revision (cle : exercice + cycle + item)
         await push("control_states", all(ControlState.self), label: "Contrôles",
+                   horodatage: { $0.updatedAt },
                    id: { Self.stableID($0.exerciceID.pg, $0.cycleRaw, $0.itemID) }) { c in
             [
                 "id": Self.stableID(c.exerciceID.pg, c.cycleRaw, c.itemID).pg,
@@ -501,6 +543,7 @@ extension SupabaseSync {
 
         // Justifications de comptes (cle : exercice + compte)
         await push("account_justifications", all(AccountJustification.self), label: "Justifications",
+                   horodatage: { $0.updatedAt },
                    id: { Self.stableID($0.exerciceID.pg, $0.accountNumber) }) { j in
             var p: [String: Any] = [
                 "id": Self.stableID(j.exerciceID.pg, j.accountNumber).pg,
@@ -563,12 +606,15 @@ extension SupabaseSync {
             ]))
         }
 
+        // La date est deja dans le corps du message : on la relit plutot que de
+        // porter le modele jusqu'ici.
         await push("bank_reconciliations", reconPayloads, label: "Rapprochements",
+                   horodatage: { Self.parseDate($0.body["updated_at"]) ?? .distantPast },
                    id: { $0.id }) { $0.body }
 
         // Elements de rapprochement (id propre, rattaches a leur rapprochement)
         await push("recon_items", reconItems, label: "Éléments de rapprochement",
-                   id: { $0.id }) { i in
+                   horodatage: { $0.updatedAt }, id: { $0.id }) { i in
             [
                 "id": i.id.pg,
                 "recon_id": Self.stableID(i.exerciceID.pg, i.accountNumber).pg,
@@ -582,12 +628,18 @@ extension SupabaseSync {
                 "compte_charge": i.compteCharge,
                 "montant_ht": self.safe(i.montantHT),
                 "taux_tva": self.safe(i.tauxTva),
-                "montant_tva": self.safe(i.montantTva)
+                "montant_tva": self.safe(i.montantTva),
+                "updated_at": i.updatedAt.ISO8601Format()
             ]
         }
 
         // Declarations de TVA : lignes (id propre)
-        await push("ca3_entries", all(Ca3Entry.self), label: "TVA — lignes", id: { $0.id }) { e in
+        // Resolution sur la cle logique : deux identifiants peuvent designer la
+        // meme ligne de declaration, l'un herite d'un import ancien, l'autre du
+        // nouvel identifiant stable. Sans cela, l'index unique rejette
+        // l'ecriture en 23505 au lieu de mettre a jour.
+        await push("ca3_entries", all(Ca3Entry.self), label: "TVA — lignes",
+                   onConflict: "exercice_id,periode,taux", id: { $0.id }) { e in
             [
                 "id": e.id.pg,
                 "exercice_id": e.exerciceID.pg,
@@ -935,8 +987,15 @@ extension SupabaseSync {
         var added = 0
         for r in rows {
             guard let id = uuid(r["id"]), let exID = uuid(r["exercice_id"]) else { continue }
+            // Sans date distante, la ligne est reputee ancienne : la saisie
+            // locale n'est jamais ecrasee par defaut.
+            let distante = date(r["updated_at"]) ?? .distantPast
+
             let target: ReconItem
             if let local = byID[id] {
+                // La version locale est plus recente : elle repartira au
+                // prochain envoi, on ne la remplace pas.
+                guard distante > local.updatedAt else { continue }
                 target = local
             } else {
                 let i = ReconItem(exerciceID: exID, accountNumber: str(r["account_number"]))
@@ -954,6 +1013,7 @@ extension SupabaseSync {
             target.montantHT = dbl(r["montant_ht"])
             target.tauxTva = dbl(r["taux_tva"])
             target.montantTva = dbl(r["montant_tva"])
+            target.updatedAt = distante
             if target.docPath.isEmpty {
                 target.docName = str(r["doc_name"])
                 target.docPath = str(r["doc_path"])

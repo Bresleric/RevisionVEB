@@ -453,6 +453,15 @@ final class ReconItem {
     var tauxTva: Double = 0        // 20, 10, 5.5, 2.1 ou 0
     var montantTva: Double = 0
 
+    /// Date de derniere modification, pour arbitrer entre deux Macs.
+    ///
+    /// `distantPast` par defaut, et non `Date()` : c'est cette valeur
+    /// qu'heritent les lignes existantes a la migration du schema. Avec la date
+    /// du jour, une ligne jamais retouchee se pretendrait fraichement modifiee,
+    /// les deux machines se declareraient les plus recentes et aucune ne
+    /// cederait. Une ligne jamais editee ne doit revendiquer aucune autorite.
+    var updatedAt: Date = Date.distantPast
+
     init(id: UUID = UUID(), exerciceID: UUID, accountNumber: String,
          libelle: String = "", montant: Double = 0, ordre: Int = 0,
          docName: String = "", docPath: String = "", docBookmark: Data? = nil) {
@@ -465,9 +474,14 @@ final class ReconItem {
         self.docName = docName
         self.docPath = docPath
         self.docBookmark = docBookmark
+        // Une ligne creee a l'instant porte la date du jour ; seules les lignes
+        // deja en base au moment de la migration heritent de `distantPast`.
+        self.updatedAt = Date()
     }
 
     var hasDocument: Bool { !docPath.isEmpty || docBookmark != nil }
+
+    func touch() { updatedAt = Date() }
 
     /// Vrai des qu'une ventilation est saisie sur la ligne.
     var estVentile: Bool { !compteCharge.isEmpty || montantHT != 0 || montantTva != 0 }
