@@ -717,7 +717,7 @@ struct DetailContentView: View {
             case .dashboard:
                 DashboardView()
             case .importData:
-                ImportView(exerciceID: exerciceID)
+                ImportView(exerciceID: exerciceID, dossierID: dossierID)
             case .chartOfAccounts:
                 ChartOfAccountsView(exerciceID: exerciceID, dossierID: dossierID)
             case .documents:
@@ -842,10 +842,16 @@ struct CycleBalanceView: View {
             HStack {
                 Picker("", selection: $tab) {
                     Text("Soldes intermédiaires").tag(0)
+                    Text("Par centre de profit").tag(1)
+                    Text("Évolution").tag(2)
+                    Text("Paramétrage").tag(3)
                     Text(pendingTabLabel).tag(4)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 400)
+                // maxWidth et non width : a largeur fixe, le selecteur deborde
+                // d'une fenetre etroite et ses derniers onglets deviennent
+                // inatteignables.
+                .frame(maxWidth: 820)
                 Spacer()
             }
             .padding(.horizontal)
@@ -854,12 +860,23 @@ struct CycleBalanceView: View {
 
             Divider()
 
-            if tab == 4 {
-                CyclePendingItemsView(cycle: cycle, exerciceID: exerciceID)
-            } else {
-                SigView(exerciceID: exerciceID)
+            // Le contenu est enferme dans l'espace restant. Sans cette
+            // contrainte, une vue a base de `List` reclame la hauteur de tout
+            // son contenu, la pile grandit au-dela de la fenetre et le
+            // selecteur d'onglets se retrouve rogne en haut : on entre dans un
+            // onglet sans pouvoir en ressortir.
+            Group {
+                switch tab {
+                case 1: SigCentresProfitView(exerciceID: exerciceID, dossierID: dossierID)
+                case 2: EvolutionCentreView(dossierID: dossierID)
+                case 3: ParametrageCentresView(exerciceID: exerciceID, dossierID: dossierID)
+                case 4: CyclePendingItemsView(cycle: cycle, exerciceID: exerciceID)
+                default: SigView(exerciceID: exerciceID)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var cycleBalanceContent: some View {
@@ -3824,6 +3841,8 @@ struct AccountDetailSheet: View {
     @Query private var justifications: [AccountJustification]
 
     @Query(sort: \BalanceAccount.accountNumber) private var tousComptes: [BalanceAccount]
+    @Query private var exercices: [Exercice]
+    @Query private var dossiers: [Dossier]
 
     @State private var showImporter = false
     @State private var itemALier: ReconItem?
@@ -3842,6 +3861,14 @@ struct AccountDetailSheet: View {
     private var totalTva: Double { items.reduce(0) { $0 + $1.montantTva } }
     private var ecart: Double { compte.balanceN - total }
     private var sansPiece: Int { items.filter { !$0.hasDocument }.count }
+
+    /// Identification du dossier, pour l'en-tete du PDF.
+    private var exerciceCourant: Exercice? { exercices.first { $0.id == exerciceID } }
+    private var exerciceLibelle: String { exerciceCourant?.libelle ?? "" }
+    private var dossierNom: String {
+        guard let ex = exerciceCourant else { return "" }
+        return dossiers.first { $0.id == ex.dossierID }?.nom ?? ""
+    }
 
     /// Comptes de charge proposes a la saisie : classes 6 de la balance.
     private var comptesCharge: [BalanceAccount] {
@@ -4029,6 +4056,14 @@ struct AccountDetailSheet: View {
             .controlSize(.small)
             .help("Saisir le compte de charge, le HT, le taux et la TVA pour chaque ligne")
 
+            Button {
+                exporterPdf()
+            } label: {
+                Label("PDF…", systemImage: "doc.richtext")
+            }
+            .disabled(items.isEmpty)
+            .help("Édite le détail du compte en PDF, prêt à joindre au dossier")
+
             Spacer()
 
             Text(ventile
@@ -4043,6 +4078,26 @@ struct AccountDetailSheet: View {
     }
 
     // MARK: - Actions
+
+    /// Edite le detail en PDF et l'ouvre.
+    ///
+    /// Le fichier est ecrit dans le dossier temporaire : c'est une piece qu'on
+    /// consulte, imprime ou glisse dans un courriel, pas une donnee a conserver
+    /// — elle se regenere en un clic depuis les lignes saisies.
+    private func exporterPdf() {
+        guard let url = PdfDetailCompte.generer(
+            compte: compte,
+            lignes: items,
+            cycle: cycle,
+            exercice: exerciceLibelle,
+            dossier: dossierNom,
+            ventile: ventile
+        ) else {
+            print("❌ PDF du détail : génération impossible")
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
 
     /// Cree une ligne par fichier choisi : le libelle reprend le nom du fichier,
     /// il ne reste que le montant a saisir.

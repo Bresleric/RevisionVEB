@@ -722,6 +722,20 @@ extension SupabaseSync {
             ]
         }
 
+        // Rattachement des comptes aux centres de profit (Cycle A)
+        await push("centre_profit_rules", all(CentreProfitRule.self), label: "Centres de profit",
+                   horodatage: { $0.updatedAt },
+                   id: { CentreProfitRule.stableID(dossierID: $0.dossierID, accountNumber: $0.accountNumber) }) { r in
+            [
+                "id": CentreProfitRule.stableID(dossierID: r.dossierID, accountNumber: r.accountNumber).pg,
+                "dossier_id": r.dossierID.pg,
+                "account_number": r.accountNumber,
+                "centre_raw": r.centreRaw,
+                "part_liesel": self.safe(r.partLiesel),
+                "updated_at": r.updatedAt.ISO8601Format()
+            ]
+        }
+
         // DSN Assiettes (Cycle H)
         await push("dsn_assiettes", all(DsnAssiette.self), label: "DSN Assiettes",
                    onConflict: "exercice_id,mois,annee,etablissement", id: { $0.id }) { d in
@@ -843,6 +857,7 @@ extension SupabaseSync {
         await loadImmoAssetsMerged(using: context)
         await loadClass2Movements(using: context)
         await loadCycleRules(using: context)
+        await loadCentresProfit(using: context)
         await loadDsnAssiettes(using: context)
         await loadSocialReconciliations(using: context)
         await loadCyclePieces(using: context)
@@ -1220,6 +1235,40 @@ extension SupabaseSync {
             }
         }
         print("  ✅ Règles de cycle: \(added) ajoutées")
+    }
+
+    private func loadCentresProfit(using context: ModelContext) async {
+        guard let rows = await fetchRows("centre_profit_rules", label: "Centres de profit") else { return }
+        let locals = (try? context.fetch(FetchDescriptor<CentreProfitRule>())) ?? []
+        var byID = Dictionary(locals.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        var added = 0, merged = 0
+        for r in rows {
+            guard let id = uuid(r["id"]), let dosID = uuid(r["dossier_id"]) else { continue }
+            let distante = date(r["updated_at"]) ?? .distantPast
+
+            let target: CentreProfitRule
+            if let local = byID[id] {
+                // La regle locale est plus recente : elle repartira au prochain
+                // envoi, on ne la remplace pas.
+                guard distante > local.updatedAt else { continue }
+                target = local
+                merged += 1
+            } else {
+                let regle = CentreProfitRule(id: id, dossierID: dosID,
+                                             accountNumber: str(r["account_number"]))
+                context.insert(regle)
+                byID[id] = regle
+                target = regle
+                added += 1
+            }
+            target.dossierID = dosID
+            target.accountNumber = str(r["account_number"])
+            target.centreRaw = str(r["centre_raw"])
+            target.partLiesel = dbl(r["part_liesel"])
+            target.updatedAt = distante
+        }
+        print("  ✅ Centres de profit: \(added) ajoutés, \(merged) mis à jour")
     }
 
     private func loadDsnAssiettes(using context: ModelContext) async {

@@ -552,6 +552,122 @@ extension ImportManager {
         return log
     }
 
+    // MARK: - Import des centres de profit
+
+    /// Importe le rattachement des comptes aux centres de profit.
+    ///
+    /// Colonnes attendues : Compte, Centre (F, L, C ou DIR), Part Liesel.
+    /// La part n'a de sens que pour un compte commun ; a defaut, la cle usuelle
+    /// de la maison, 1/6 pour Liesel.
+    ///
+    /// Le rattachement est une regle de gestion, pas une donnee comptable : il
+    /// survit aux reimports de balance, comme les regles de cycle.
+    func importCentresProfit(url: URL, dossierID: UUID, exerciceID: UUID) async -> ImportLog {
+        print("🏷️ ImportManager.importCentresProfit: \(url.lastPathComponent)")
+
+        isImporting = true
+        importProgress = 0.0
+
+        let log = ImportLog(
+            fileName: url.lastPathComponent,
+            fileType: .balanceExcel,
+            exerciceID: exerciceID
+        )
+
+        func fail(_ message: String) -> ImportLog {
+            log.status = .failed
+            log.errorDetails = message
+            modelContext.insert(log); try? modelContext.save()
+            isImporting = false
+            print("❌ Centres de profit : \(message)")
+            return log
+        }
+
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return fail("Fichier introuvable (s'il est dans iCloud/OneDrive, telecharge-le d'abord).")
+        }
+        let ext = url.pathExtension.lowercased()
+        if ext == "xlsx" || ext == "xls" {
+            return fail("Format Excel pas encore active. Exporte la table en CSV.")
+        }
+        guard let contenu = readTextWithBestEncoding(url: url) else {
+            return fail("Impossible de lire le fichier (encodage non reconnu).")
+        }
+
+        let lignes = contenu
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .components(separatedBy: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+
+        guard let entete = lignes.first else { return fail("Fichier vide.") }
+        let sep = entete.contains(";") ? ";" : (entete.contains("\t") ? "\t" : ",")
+
+        func colonne(_ motif: String) -> Int {
+            entete.components(separatedBy: sep).firstIndex {
+                $0.folding(options: .diacriticInsensitive, locale: Locale(identifier: "fr_FR"))
+                    .lowercased().contains(motif)
+            } ?? -1
+        }
+        let iCompte = colonne("compte")
+        let iCentre = colonne("centre")
+        let iPart   = colonne("part")
+
+        guard iCompte >= 0, iCentre >= 0 else {
+            return fail("Colonnes attendues : Compte et Centre.")
+        }
+
+        let existantes = (try? modelContext.fetch(FetchDescriptor<CentreProfitRule>())) ?? []
+        var parCompte = Dictionary(
+            existantes.filter { $0.dossierID == dossierID }.map { ($0.accountNumber, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+
+        var crees = 0, majs = 0, ignorees = 0
+
+        for ligne in lignes.dropFirst() {
+            let cases = ligne.components(separatedBy: sep).map { $0.trimmingCharacters(in: .whitespaces) }
+            func valeur(_ i: Int) -> String { (i >= 0 && i < cases.count) ? cases[i] : "" }
+
+            let compte = valeur(iCompte)
+            guard !compte.isEmpty else { ignorees += 1; continue }
+            guard let centre = CentreProfit(rawValue: valeur(iCentre).uppercased()) else {
+                ignorees += 1; continue
+            }
+            let part = Self.parseFrenchAmount(valeur(iPart)) ?? 16.67
+
+            if let regle = parCompte[compte] {
+                regle.centre = centre
+                regle.partLiesel = part
+                regle.touch()
+                majs += 1
+            } else {
+                let regle = CentreProfitRule(
+                    id: CentreProfitRule.stableID(dossierID: dossierID, accountNumber: compte),
+                    dossierID: dossierID, accountNumber: compte,
+                    centre: centre, partLiesel: part
+                )
+                modelContext.insert(regle)
+                parCompte[compte] = regle
+                crees += 1
+            }
+        }
+
+        log.recordsCount = crees + majs
+        log.successCount = crees + majs
+        log.status = (crees + majs) > 0 ? .success : .failed
+        log.errorDetails = "\(crees) rattachement(s) créé(s), \(majs) mis à jour"
+            + (ignorees > 0 ? ", \(ignorees) ligne(s) ignorée(s)" : "")
+
+        modelContext.insert(log)
+        try? modelContext.save()
+
+        isImporting = false
+        importProgress = 1.0
+        print("🏷️ Centres de profit : \(crees) créés, \(majs) mis à jour, \(ignorees) ignorés")
+        return log
+    }
+
     // MARK: - Archivage des pieces
 
     /// Copie le recapitulatif DSN dans le stockage de l'app et l'enregistre comme

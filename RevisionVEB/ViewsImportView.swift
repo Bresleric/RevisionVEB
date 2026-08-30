@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 
 struct ImportView: View {
     let exerciceID: UUID
+    let dossierID: UUID
 
     @Environment(\.modelContext) private var modelContext
     @StateObject private var importManager: ImportManager
@@ -25,8 +26,9 @@ struct ImportView: View {
         importLogsRaw.filter { $0.exerciceID == exerciceID }
     }
 
-    init(exerciceID: UUID) {
+    init(exerciceID: UUID, dossierID: UUID) {
         self.exerciceID = exerciceID
+        self.dossierID = dossierID
         // Placeholder EN MEMOIRE uniquement : ne doit JAMAIS toucher le store disque
         // de l'app (sinon conflit de schema -> corruption). Le vrai modelContext de
         // l'environnement est injecte dans .onAppear.
@@ -37,7 +39,7 @@ struct ImportView: View {
             BankReconciliation.self, ReconItem.self, TvaCompteTaux.self, Ca3Entry.self, Ca3Period.self,
             ImmoInvoice.self, Class2Movement.self, CirculationDocument.self,
             SocialPayrollEntry.self, DsnAssiette.self, SocialReconciliation.self,
-            SocialAnomaly.self, CyclePiece.self,
+            SocialAnomaly.self, CyclePiece.self, CentreProfitRule.self,
             configurations: config
         )
         _importManager = StateObject(wrappedValue: ImportManager(modelContext: ModelContext(container)))
@@ -273,6 +275,9 @@ struct ImportView: View {
         if filename.contains("dsn") {
             print("📋 Import DSN détecté...")
             _ = await importManager.importDsnFile(url: url, exerciceID: exerciceID)
+        } else if filename.contains("centre") || filename.contains("profit") {
+            print("🏷️ Import des centres de profit détecté...")
+            _ = await importManager.importCentresProfit(url: url, dossierID: dossierID, exerciceID: exerciceID)
         } else if filename.contains("641") || filename.contains("grand livre") || filename.contains("grand-livre") {
             print("📗 Import Grand Livre 641 détecté...")
             _ = await importManager.importGL641File(url: url, exerciceID: exerciceID)
@@ -358,7 +363,7 @@ struct ImportLogRow: View {
 }
 
 #Preview {
-    ImportView(exerciceID: UUID())
+    ImportView(exerciceID: UUID(), dossierID: UUID())
         .modelContainer(for: Invoice.self, inMemory: true)
         .frame(width: 1200, height: 800)
 }

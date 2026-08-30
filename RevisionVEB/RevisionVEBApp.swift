@@ -65,6 +65,7 @@ struct RevisionVEBApp: App {
             SocialReconciliation.self,
             SocialAnomaly.self,
             CyclePiece.self,
+            CentreProfitRule.self,
         ])
 
         // Supabase est la source de vérité. SwiftData = cache local synchronisé.
@@ -135,6 +136,10 @@ struct RevisionVEBApp: App {
                     }
                 }
         }
+        // Sans taille imposee, la fenetre se dimensionne sur la hauteur ideale
+        // de son contenu : un tableau de cent trente lignes la faisait grandir
+        // au-dela de l'ecran, rendant inatteignables le haut comme le bas.
+        .defaultSize(width: 1440, height: 900)
         .modelContainer(sharedModelContainer)
         .commands {
             CommandGroup(replacing: .newItem) {
