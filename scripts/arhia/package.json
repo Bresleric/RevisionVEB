@@ -1,0 +1,9 @@
+{
+  "name": "revisionveb-arhia",
+  "private": true,
+  "type": "module",
+  "description": "Téléchargement des bulletins et états de paie depuis Combo Pay (Arhia)",
+  "dependencies": {
+    "playwright": "1.52.0"
+  }
+}
