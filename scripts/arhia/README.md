@@ -23,6 +23,10 @@ général de se reconnecter.
 | Voir la liste sans télécharger | `… --liste` |
 | Inclure les versions provisoires | `… --provisoires` |
 | Autre dossier de destination | `… --dossier "/Volumes/Archives/Paie"` |
+| Garder les réponses brutes de l'API pour analyse | `… --diagnostic` |
+
+Chaque exécution se termine par un récapitulatif du nombre de documents par
+mois et par catégorie, ce qui permet de repérer un mois incomplet.
 
 Destination par défaut : `~/Documents/Paie Arhia/<dossier>/<AAAA-MM>/<type>/`,
 avec un `index.csv` récapitulatif à la racine.
@@ -30,6 +34,13 @@ avec un `index.csv` récapitulatif à la racine.
 Prérequis : Node.js (LTS) et Google Chrome. Sans Chrome, lancer une fois
 `npx playwright install chromium` dans `scripts/arhia`.
 
-Les libellés de type (« Bulletins », « Etats de paie », « Attestations
-fiscales »…) viennent des constantes de l'application Arhia ; un type inconnu
-est rangé dans `type-N` et pourra être renommé une fois identifié.
+Les catégories de documents reprennent les onglets de la page « États de
+paie » de l'application Arhia : `Bulletins` (y compris bulletins d'épargne
+salariale), `Syntheses`, `Comptabilite`, `Paiements`, `Cotisations`, `Departs`
+(documents de solde de tout compte), `Attestations fiscales` et `Autres
+documents`. Un type inconnu est rangé dans `type-N` et pourra être renommé une
+fois identifié.
+
+Si rien n'est trouvé ou si l'API renvoie des erreurs, relancer avec
+`--diagnostic` : les réponses brutes (sans le jeton de session) sont écrites
+dans un fichier temporaire dont le chemin est affiché au démarrage.

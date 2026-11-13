@@ -18,19 +18,20 @@ const BASE = "https://combohr.arhia.fr";
 const GRAPHQL = `${BASE}/graphql`;
 const DOWNLOAD_LIVRABLE = `${BASE}/reports/downloadLivrable`;
 
-// Types de livrables connus (constantes lues dans l'application Arhia).
-// Les autres types sont rangés dans un dossier "type-N" ; on affinera.
-const TYPE_LABELS = {
-  1: "Bulletins",
-  2: "Epargne salariale",
-  9: "Etats de paie",
-  10: "Etats de paie",
-  37: "Etats de paie",
-  38: "Autres documents",
-  39: "Autres documents",
-  40: "Attestations fiscales",
-  41: "Bulletins",
-};
+// Catégories de livrables : reprises des onglets de la page « États de paie »
+// de l'application Arhia (filtres par liv_type lus dans son code). Un type
+// absent d'ici est rangé dans un dossier "type-N" ; on affinera.
+const CATEGORIES = [
+  ["Bulletins", [1, 41]], // 41 = bulletin de versement d'épargne salariale
+  ["Syntheses", [2, 3, 4, 5]],
+  ["Comptabilite", [28, 29, 30, 31, 32, 33, 34]],
+  ["Paiements", [7, 8]],
+  ["Cotisations", [6, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 35, 36]],
+  ["Departs", [9, 10, 37]], // documents pour soldes de tout compte
+  ["Attestations fiscales", [40]],
+  ["Autres documents", [38, 39]],
+];
+const TYPE_LABELS = Object.fromEntries(CATEGORIES.flatMap(([lib, types]) => types.map((t) => [t, lib])));
 const ORIGINE_VIDE = 3; // liv_origin = VIDE : livrable sans fichier
 
 // ---------------------------------------------------------------- arguments
@@ -47,6 +48,8 @@ Usage : ./telecharger-bulletins.sh [options]
   --provisoires       Inclure les versions provisoires (défaut : définitives)
   --liste             Lister les documents sans les télécharger
   --forcer            Retélécharger les fichiers déjà présents
+  --diagnostic        Enregistrer les réponses brutes de l'API dans un fichier
+                      temporaire (hors du dépôt) pour analyse en cas de problème
   --help              Cette aide
 
 Le script ne stocke aucun identifiant. La session du navigateur est conservée
@@ -63,6 +66,7 @@ const opt = {
   provisoires: false,
   liste: false,
   forcer: false,
+  diagnostic: false,
 };
 for (let i = 0; i < args.length; i++) {
   const a = args[i];
@@ -75,6 +79,7 @@ for (let i = 0; i < args.length; i++) {
   else if (a === "--provisoires") opt.provisoires = true;
   else if (a === "--liste") opt.liste = true;
   else if (a === "--forcer") opt.forcer = true;
+  else if (a === "--diagnostic") opt.diagnostic = true;
   else { console.error(`Option inconnue : ${a}`); aide(); process.exit(2); }
 }
 if (!/^\d{6}$/.test(String(opt.depuis)) || !/^\d{6}$/.test(String(opt.jusqua))) {
@@ -119,13 +124,28 @@ async function ouvrirNavigateur() {
 // ---------------------------------------------------------------- API
 let token = null;
 
+// Journal de diagnostic (--diagnostic) : réponses brutes, sans le jeton.
+let fichierDiagnostic = null;
+function diagnostic(etape, contenu) {
+  if (!opt.diagnostic) return;
+  if (!fichierDiagnostic) {
+    fichierDiagnostic = path.join(os.tmpdir(), `arhia-diagnostic-${Date.now()}.jsonl`);
+    console.log(`Diagnostic : ${fichierDiagnostic}`);
+  }
+  const texte = typeof contenu === "string" ? contenu.slice(0, 20000) : contenu;
+  fs.appendFileSync(fichierDiagnostic, JSON.stringify({ quand: new Date().toISOString(), etape, contenu: texte }) + "\n");
+}
+
 async function gql(query, variables = {}) {
   const r = await fetch(GRAPHQL, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
     body: JSON.stringify({ query, variables }),
   });
-  const j = await r.json().catch(() => ({}));
+  const brut = await r.text();
+  diagnostic("graphql", { statut: r.status, variables, reponse: brut });
+  let j = {};
+  try { j = JSON.parse(brut); } catch { /* réponse non JSON */ }
   if (!r.ok || j.errors) {
     const msg = j.errors ? j.errors.map((e) => e.message).join(" ; ") : `HTTP ${r.status}`;
     throw new Error(`GraphQL : ${msg}`);
@@ -137,12 +157,14 @@ async function telechargerLivrable(livId) {
   const r = await fetch(`${DOWNLOAD_LIVRABLE}?liv_id=${livId}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const ct = r.headers.get("content-type") || "";
+  diagnostic("downloadLivrable", { livId, statut: r.status, contentType: ct });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   if (ct.includes("application/json")) {
     // Forme observée dans l'application : { data: { file: { data: [octets] },
     // filename, fileNameForSave, mimetype } }
     const j = await r.json();
+    if (j.errors) throw new Error(j.errors.map((e) => e.message).join(" ; "));
     const d = j.data ?? j;
     const octets = d.file?.data ?? d.file;
     if (!Array.isArray(octets)) throw new Error("réponse JSON sans contenu de fichier");
@@ -232,7 +254,6 @@ async function main() {
       console.error(`  Sélection du dossier impossible : ${e.message}`);
       continue;
     }
-    const lotIds = lots.map((l) => l.lot_id);
     if (lots.length) console.log(`  Lots : ${lots.map((l) => `${l.lot_code} ${l.lot_libelle ?? ""}`.trim()).join(", ")}`);
 
     // Interrogation année par année pour rester léger.
@@ -240,11 +261,15 @@ async function main() {
     for (let annee = Math.floor(opt.depuis / 100); annee <= Math.floor(opt.jusqua / 100); annee++) {
       const startPeri = Math.max(opt.depuis, annee * 100 + 1);
       const endPeri = Math.min(opt.jusqua, annee * 100 + 12);
-      const variables = { startPeri, endPeri, isVersionDef: opt.provisoires ? null : true, lotIds: lotIds.length ? lotIds : null };
+      // Même forme que la page « États de paie » de l'application : plage de
+      // périodes et version définitive, sans filtre de lot (le dossier a été
+      // sélectionné côté serveur par selectFolder).
+      const variables = { startPeri, endPeri };
+      if (!opt.provisoires) variables.isVersionDef = true;
       try {
         const r = await gql(
-          `query ($startPeri: Int, $endPeri: Int, $isVersionDef: Boolean, $lotIds: [Int]) {
-             getLivrables(startPeri: $startPeri, endPeri: $endPeri, isVersionDef: $isVersionDef, lotIds: $lotIds) {
+          `query ($startPeri: Int, $endPeri: Int, $isVersionDef: Boolean) {
+             getLivrables(startPeri: $startPeri, endPeri: $endPeri, isVersionDef: $isVersionDef) {
                liv_id liv_type liv_filename liv_lib_perso liv_periode_debut liv_periode_fin
                liv_origin liv_output_type liv_datetime_creation lot_id cnt_id aeta_type lot_code eta_code
                loli { loli_peri_anneemois loli_est_version_def loli_version }
@@ -309,6 +334,18 @@ async function main() {
       .concat(manifeste.map((m) => [m.pad, m.periode, m.type, m.liv_type, m.liv_id, m.salarie, m.version, m.fichier].map((v) => String(v ?? "").replace(/;/g, ",")).join(";")))
       .join("\n");
     fs.writeFileSync(path.join(opt.dossier, "index.csv"), csv + "\n");
+  }
+
+  // Récapitulatif : nombre de documents par mois et par catégorie.
+  if (manifeste.length) {
+    const types = [...new Set(manifeste.map((m) => m.type))].sort();
+    const periodes = [...new Set(manifeste.map((m) => m.periode))].sort();
+    const compte = {};
+    for (const m of manifeste) compte[`${m.periode}|${m.type}`] = (compte[`${m.periode}|${m.type}`] ?? 0) + 1;
+    const larg = Math.max(8, ...types.map((t) => t.length));
+    console.log("\nRécapitulatif (documents par mois et par catégorie) :");
+    console.log("  " + "Mois".padEnd(9) + types.map((t) => t.padStart(larg)).join(" "));
+    for (const p of periodes) console.log("  " + p.padEnd(9) + types.map((t) => String(compte[`${p}|${t}`] ?? "").padStart(larg)).join(" "));
   }
 
   console.log(`\nTerminé : ${nbTelecharges} téléchargé(s), ${nbIgnores} déjà présent(s), ${nbErreurs} erreur(s).`);
